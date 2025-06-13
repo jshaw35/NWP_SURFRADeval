@@ -307,151 +307,6 @@ def load_and_mask_nwp(
     return ds, avail_masks
 
 
-def compute_nwp_ensemble_averages(
-    ds: xr.Dataset,
-    ens_mems: list,
-    ens_name: str,
-    count_threshold: int,
-):
-    """
-    Create a new NWP product by averaging over specified products.
-    Then mask out areas of the average where data is missing.
-
-    Inputs:
-    ds: xarray Dataset
-        Data to operate on.
-    ens_mems: list
-        list of ensemble members identified by their "nwp_source" dimension.
-    ens_name: string
-        name for the new forecast product.
-    count_threshold: integer
-        integer specifying how many non-nans are needed to
-        compute the new field. Otherwise it will be masked.
-
-    Outputs:
-    ds_out: xarray Dataset
-        Data with the new mean value added along "nwp_source"
-    """
-
-    ens_subset = ds.sel(nwp_source=ens_mems)
-
-    # Mask the ensemble means if there are less than "count_threshold" members in them.
-    mems_empty = np.isnan(ens_subset).all(dim="valid_time").sum(dim="nwp_source")
-    mems_mask = (len(ens_mems) - mems_empty) >= count_threshold
-
-    ens_ds = ens_subset.mean(dim="nwp_source").where(mems_mask)
-
-    ds_out = xr.merge(
-        [
-            ds,
-            ens_ds.assign_coords(nwp_source=ens_name).expand_dims("nwp_source"),
-        ]
-    )
-    # Modify the mask so it broadcasts against the correct nwp_source values.
-    out_mask = np.bitwise_or(mems_mask, (ds_out.nwp_source != ens_name))
-
-    return ds_out, out_mask
-
-
-def plot_bulk_metrics(
-    surfrad_var: str,
-    nwp_var: str,
-    surfrad_ds: xr.Dataset,
-    nwp_ds: xr.Dataset,
-    nwp_masks: xr.Dataset,
-    surfrad_masks: xr.Dataset,
-    colors: list = sns.color_palette("colorblind"),
-    save_figs: bool = False,
-):
-    """
-    Produce a bar plot showing mean absolute error (MAE) and
-    root-mean-square error (RMSE) for the clear-sky index (CSI)
-    and the normal radiation field.
-
-    Inputs:
-    surfrad_var: string
-        variable identifier for SURFRAD observations.
-    nwp_var: string
-        variable identifier for NWP forecast data.
-    surfrad_ds: xarray Dataset
-        Dataset containing SURFRAD observations.
-    nwp_ds: xarray Dataset
-        Dataset containing NWP forecast data.
-    nwp_masks: xarray Dataset
-        Dataset containing masks for each NWP variable.
-    surfrad_masks: xarray Dataset
-        Dataset containing masks for each obs variable.
-    colors: list
-        list of objects that matplotlib can use as color input.
-    save_figs: boolean
-        boolean indicating whether the figure should be saved.
-
-    Outputs:
-    None. Figure is produced and optionally saved.
-    """
-
-    surfrad_clearsky_var = f"clearsky_{surfrad_var}"
-
-    nwp_mask = nwp_masks[nwp_var].sum(dim="time")
-    surfrad_data = surfrad_ds[surfrad_var].where(nwp_mask)
-    drop_mask = ~np.isnan(nwp_ds[nwp_var]).all(dim="valid_time")
-    nwp_data = (
-        nwp_ds[nwp_var].isel(nwp_source=drop_mask).where(surfrad_masks[surfrad_var])
-    )
-
-    # Masking out solar elevation angles <10 degrees.
-    surfrad_mask = surfrad_data.zenith < 80
-
-    # Compute the clear-sky index error.
-    error = (nwp_data - surfrad_data).load()
-    error_csi = error / surfrad_data[surfrad_clearsky_var]
-    error_csi = error_csi.where(surfrad_mask)
-
-    # Compute error in the GHI forecast, excluding low insolation times.
-    mae = np.abs(error).where(surfrad_mask).mean(dim="valid_time")
-    rmse = np.sqrt(
-        (error**2).where(surfrad_mask).mean(dim="valid_time")
-    )
-
-    # Compute error in the clear-sky index. No masking by insolation yet.
-    mae_csi = np.abs(error_csi).mean(dim="valid_time")
-    rmse_csi = np.sqrt(
-        (error_csi**2).mean(dim="valid_time")
-    )
-
-    # Plot all error metrics together
-    error_metrics = [
-        mae_csi,
-        rmse_csi,
-        mae,
-        rmse,
-    ]
-
-    error_labels = [
-        f"Mean Absolute Error in Clear-sky {surfrad_var.upper()} Index",
-        f"Root-Mean-Square Error in Clear-sky {surfrad_var.upper()} Index",
-        f"Mean Absolute {surfrad_var.upper()} Error {surfrad_var.upper()} (Wm$^{-2}$)",
-        f"Root-Mean-Square {surfrad_var.upper()} Error (Wm$^{-2}$)",
-    ]
-
-    fig, axs = plt.subplots(2, 2, figsize=(16, 10))
-    axs = axs.flat
-
-    for _error_data, _label, _ax in zip(error_metrics, error_labels, axs):
-        _ax.bar(_error_data.nwp_source, _error_data, color=colors)
-        _ax.set_ylabel(_label)
-        _ax.tick_params(labelrotation=30)
-
-    if save_figs:
-        save_filename = f"NWP_error_{datestring}_{surfrad_sitename}.png"
-        save_path = os.path.join(save_dir, save_filename)
-        fig.savefig(
-            save_path,
-            format="png",
-            bbox_inches="tight",
-        )
-
-
 def compute_bulk_metrics(
     surfrad_var: str,
     nwp_var: str,
@@ -576,39 +431,31 @@ if __name__ == "__main__":
     nwp_var = "dswrf"
     utc_shift = -6
 
+
+    nwp_datavars = [
+        "dswrf",
+        "vbdsf",
+        "vddsf",
+    ]
+
+    year_start = 2024
+    month_start = 3
+    day_start = 1
+
+    year_end = 2024
+    month_end = 7
+    day_end = 8
+
+    data_datetime_start = pd.Timestamp(year_start, month_start, day_start)
+    data_datetime_end = pd.Timestamp(year_end, month_end, day_end)
+
+    datestring = data_datetime_start.strftime("%Y%m%d_") + data_datetime_end.strftime(
+        "%Y%m%d"
+    )
+
     error_dict = {}
     for surfrad_sitename in ["dra", "tbl", "fpk", "sxf", "bon", "gwn", "psu"]:
-
         print(f"Processing {surfrad_sitename.upper()}")
-
-        save_dir = os.path.join(
-            "figures",
-            surfrad_sitename,
-        )
-
-        if save_figs and (not os.path.exists(save_dir)):
-            os.makedirs(save_dir)
-
-        nwp_datavars = [
-            "dswrf",
-            "vbdsf",
-            "vddsf",
-        ]
-
-        year_start = 2024
-        month_start = 3
-        day_start = 1
-
-        year_end = 2024
-        month_end = 7
-        day_end = 8
-
-        data_datetime_start = pd.Timestamp(year_start, month_start, day_start)
-        data_datetime_end = pd.Timestamp(year_end, month_end, day_end)
-
-        datestring = data_datetime_start.strftime("%Y%m%d_") + data_datetime_end.strftime(
-            "%Y%m%d"
-        )
 
         surfrad_ds, surfrad_masks = load_and_mask_surfrad(
             load_path,
