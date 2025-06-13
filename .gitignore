@@ -1,0 +1,10 @@
+*.grib2*
+*.csv
+*.png
+
+data/**
+rrfs_venv/**
+
+.DS_Store
+__pycache__/
+*.pyc
