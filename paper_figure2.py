@@ -701,9 +701,6 @@ def plot_diurnal_whiskerplot(
         valid_hours = [h for h in range(24) if len(error_values_by_hour[h]) > 0]
         valid_error_values = [error_values_by_hour[h] for h in valid_hours]
 
-        # Calculate RMSE for title
-        # rmse = np.sqrt(np.nanmean(error_data.where(surfrad_reindexed.zenith < 80) ** 2))
-
         # Create box plot
         box_parts = ax.boxplot(
             valid_error_values,
@@ -725,12 +722,7 @@ def plot_diurnal_whiskerplot(
         )
         ax.set_xticks(range(0, 25, 6))
         ax.set_xticklabels(range(0, 25, 6))
-        # ax.set_title(
-        #     f"{str(_nwp_source.values)} RMSE: {rmse:.0f}",
-        #     fontsize=fontsize,
-        # )
         ax.tick_params(axis="both", labelsize=fontsize - 2)
-        # ax.legend()
 
     if save_figs:
         save_filename = f"DailyErrorPanels_{meteo_name}_{surfrad_var}_{datestring}_{surfrad_sitename}.png"
