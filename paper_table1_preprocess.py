@@ -360,6 +360,8 @@ def compute_bulk_metrics(
     rmse = np.sqrt(
         (error**2).where(surfrad_mask).mean(dim="valid_time")
     )
+    var = error.where(surfrad_mask).var(dim="valid_time", ddof=1)
+    var_csi = error_csi.var(dim="valid_time", ddof=1)
 
     # Compute error in the clear-sky index. No masking by insolation yet.
     mae_csi = np.abs(error_csi).mean(dim="valid_time")
@@ -373,6 +375,8 @@ def compute_bulk_metrics(
         rmse_csi,
         mae,
         rmse,
+        var,
+        var_csi,
     ]
 
     return error_metrics
@@ -417,6 +421,52 @@ def shift_and_reindex_time(
     return data_reindexed
 
 
+def compute_nwp_ensemble_averages(
+    ds: xr.Dataset,
+    ens_mems: list,
+    ens_name: str,
+    count_threshold: int,
+):
+    """
+    Create a new NWP product by averaging over specified products.
+    Then mask out areas of the average where data is missing.
+
+    Inputs:
+    ds: xarray Dataset
+        Data to operate on.
+    ens_mems: list
+        list of ensemble members identified by their "nwp_source" dimension.
+    ens_name: string
+        name for the new forecast product.
+    count_threshold: integer
+        integer specifying how many non-nans are needed to
+        compute the new field. Otherwise it will be masked.
+
+    Outputs:
+    ds_out: xarray Dataset
+        Data with the new mean value added along "nwp_source"
+    """
+
+    ens_subset = ds.sel(nwp_source=ens_mems)
+
+    # Mask the ensemble means if there are less than "count_threshold" members in them.
+    mems_empty = np.isnan(ens_subset).all(dim="valid_time").sum(dim="nwp_source")
+    mems_mask = (len(ens_mems) - mems_empty) >= count_threshold
+
+    ens_ds = ens_subset.mean(dim="nwp_source").where(mems_mask)
+
+    ds_out = xr.merge(
+        [
+            ds,
+            ens_ds.assign_coords(nwp_source=ens_name).expand_dims("nwp_source"),
+        ]
+    )
+    # Modify the mask so it broadcasts against the correct nwp_source values.
+    out_mask = np.bitwise_or(mems_mask, (ds_out.nwp_source != ens_name))
+
+    return ds_out, out_mask
+
+
 # %%
 if __name__ == "__main__":
 
@@ -454,6 +504,7 @@ if __name__ == "__main__":
     )
 
     error_dict = {}
+    error_var_dict = {}
     for surfrad_sitename in ["dra", "tbl", "fpk", "sxf", "bon", "gwn", "psu"]:
         print(f"Processing {surfrad_sitename.upper()}")
 
@@ -476,6 +527,15 @@ if __name__ == "__main__":
         # window so there are no forecast overlaps.
         nwp_dayahead_ds = nwp_ds.sum(dim="time", min_count=1).load()
 
+        # Add an ensemble average for the RRFS forecasts.
+        rrfs_mems = [i for i in list(nwp_dayahead_ds.nwp_source.values) if i != "hrrr"]
+        nwp_dayahead_ds, rrfsmems_mask = compute_nwp_ensemble_averages(
+            nwp_dayahead_ds,
+            rrfs_mems,
+            ens_name="rrfs_ensmean",
+            count_threshold=6,
+        )
+
         error_metrics = compute_bulk_metrics(
             surfrad_var=surfrad_var,
             nwp_var=nwp_var,
@@ -484,9 +544,15 @@ if __name__ == "__main__":
             nwp_masks=nwp_masks.sel(location=surfrad_sitename),
             surfrad_masks=surfrad_masks,
         )
-        error_dict[surfrad_sitename] = error_metrics[-1].assign_coords(site=surfrad_sitename).expand_dims("site")
+        error_dict[surfrad_sitename] = error_metrics[3].assign_coords(site=surfrad_sitename).expand_dims("site")
+        error_var_dict[surfrad_sitename] = error_metrics[4].assign_coords(site=surfrad_sitename).expand_dims("site")
+    # %%
+    # Combine all the RMSE values into a single DataArray
     ghi_rmse_da = xr.combine_by_coords(list(error_dict.values()))
     ghi_rmse_da.name = "GHI_RMSE"
+    # Repeat with the variance values
+    ghi_error_var_da = xr.combine_by_coords(list(error_var_dict.values()))
+    ghi_error_var_da.name = "GHI_error_var"
 
     # Create a markdown table from the RMSE values
 
@@ -503,17 +569,73 @@ if __name__ == "__main__":
         index=[site.upper() for site in sites],
         columns=models,
     )
+    # Create a pandas DataFrame with the RMSE values
+    error_var_df = pd.DataFrame(
+        np.array(ghi_error_var_da.round(1)),
+        index=[site.upper() for site in sites],
+        columns=models,
+    )
+    # %%
     rmse_df.to_csv(f"{data_save_path}/table1_ghi_rmse.csv")
+    error_var_df.to_csv(f"{data_save_path}/table1_ghi_error_var.csv")
+    np.sqrt(error_var_df).to_csv(f"{data_save_path}/table1_ghi_error_stddev.csv")
 
-    # # Format the table as markdown
-    # markdown_table = rmse_df.round(1).to_markdown()
-    # print(markdown_table)
+    # %%
 
-    # # For LaTeX output
-    # latex_table = rmse_df.round(1).to_latex()
-    # print("\nLaTeX Table:")
-    # print(latex_table)
+    # Find the nwp_source with the lowest RMSE for each site
+    best_rmse_model_indices = ghi_rmse_da.argmin(dim="nwp_source")
+    best_rmse_models = ghi_rmse_da.nwp_source[best_rmse_model_indices]
+    print("Models with lowest RMSE by site:")
+    print(best_rmse_models)
+
+    # Find the nwp_source with the lowest error variance for each site
+    best_var_model_indices = ghi_error_var_da.argmin(dim="nwp_source")
+    best_var_models = ghi_error_var_da.nwp_source[best_var_model_indices]
+    print("Models with lowest error variance by site:")
+    print(best_var_models)
+    # %%
+
+    # Create a DataFrame for easier viewing
+    best_rmse_models_df = pd.DataFrame({
+        'Site': sites,
+        'Best Model': best_rmse_models.values,
+        'RMSE': [ghi_rmse_da.isel(site=i, nwp_source=best_rmse_model_indices[i]).values 
+                 for i in range(len(sites))]
+    })
+    print(best_rmse_models_df)
+    print("")
+    best_var_models_df = pd.DataFrame({
+        'Site': sites,
+        'Best Model': best_var_models.values,
+        'Error Variance': [ghi_error_var_da.isel(site=i, nwp_source=best_var_model_indices[i]).values 
+                           for i in range(len(sites))]
+    })
+    print(best_var_models_df)
+    # Move back to standard deviation for easier interpretation (units become W/m^2)
+    # Print the error variance table rounded to 1 decimal place
+    print(np.sqrt(error_var_df).round(1))
+    # %%
+
+    # Get the best model for each site by the different indices:
+    best_rmse_model_indices = ghi_rmse_da.argmin(dim="nwp_source")
+    best_rmse_models = [ghi_rmse_da.isel(nwp_source=int(i)).nwp_source.values for i in best_rmse_model_indices]
+    print(best_rmse_models)
+
+    best_var_model_indices = ghi_rmse_da.argmin(dim="nwp_source")
+    best_var_models = [ghi_rmse_da.isel(nwp_source=int(i)).nwp_source.values for i in best_var_model_indices]
+    print(best_var_models)
+
 # %%
+
+# Error standard deviation table
+# 	hrrr	rrfs_control	rrfs_mem0001	rrfs_mem0002	rrfs_mem0003	rrfs_mem0004	rrfs_mem0005
+# BON	158.1	169.0	193.0	164.4	179.4	190.3	172.5
+# DRA	91.7	92.9	97.1	89.3	89.9	105.3	89.7
+# FPK	163.4	158.0	167.7	163.3	171.4	187.1	171.5
+# GWN	160.3	168.3	192.3	172.2	174.0	207.3	163.9
+# PSU	153.5	167.0	193.3	164.6	160.7	199.0	165.8
+# SXF	157.1	154.1	178.9	154.8	165.8	182.6	160.9
+# TBL	180.4	173.0	189.6	170.5	182.8	195.5	188.3
 
 # RMSE Table
 
@@ -526,4 +648,57 @@ if __name__ == "__main__":
 # SXF	158.1	165.8	186.1	162.8	170.8	184.0	167.6
 # TBL	187.9	177.8	197.1	176.6	185.3	199.7	191.0
 
-# Dave wants me to compute the error variance (which I think is the variance after bias correction), but I am not sure how he wants me to remove the bias since it will depend on the time of day.
+# \begin{table}[]
+# \begin{tabular}{llllllll}
+#  & hrrr & rrfs\_control & rrfs\_mem0001 & rrfs\_mem0002 & rrfs\_mem0003 & rrfs\_mem0004 & rrfs\_mem0005 \\
+# BON & \textbf{158.7} & 176.1 & 198.1 & 171.9          & 184.6 & 192.2 & 177.3 \\
+# DRA & 92.7           & 95.0  & 101.0 & \textbf{90.7}  & 91.5  & 109.1 & 90.1  \\
+# FPK & \textbf{164.3} & 168.5 & 181.8 & 174.0          & 174.6 & 190.2 & 173.8 \\
+# GWN & \textbf{162.8} & 177.4 & 198.6 & 179.7          & 179.8 & 207.7 & 168.1 \\
+# PSU & \textbf{156.9} & 174.0 & 200.7 & 169.4          & 165.3 & 201.4 & 167.0 \\
+# SXF & \textbf{158.1} & 165.8 & 186.1 & 162.8          & 170.8 & 184.0 & 167.6 \\
+# TBL & 187.9          & 177.8 & 197.1 & \textbf{176.6} & 185.3 & 199.7 & 191.0
+# \end{tabular}
+# \end{table}
+
+#   Site    Best Model                RMSE
+# 0  bon          hrrr  158.67165827312022
+# 1  dra  rrfs_mem0005   90.06641326073644
+# 2  fpk          hrrr  164.28651446504367
+# 3  gwn          hrrr  162.77385425683437
+# 4  psu          hrrr  156.94877633913038
+# 5  sxf          hrrr   158.0841680437553
+# 6  tbl  rrfs_mem0002  176.62853167477158
+
+# Error Variance Table (RRFS does better!)
+
+# hrrr	rrfs_control	rrfs_mem0001	rrfs_mem0002	rrfs_mem0003	rrfs_mem0004	rrfs_mem0005
+# BON	24997.5	28553.7	37243.4	27012.6	32200.4	36217.7	29740.8
+# DRA	8402.4	8632.3	9422.1	7975.2	8081.1	11095.1	8039.9
+# FPK	26704.8	24953.9	28106.7	26661.6	29377.2	35012.9	29400.1
+# GWN	25683.2	28310.2	36981.2	29643.5	30275.5	42974.1	26848.9
+# PSU	23566.0	27904.0	37367.7	27080.1	25836.3	39603.7	27490.6
+# SXF	24670.0	23732.9	31994.0	23959.9	27486.9	33334.4	25890.5
+# TBL	32541.5	29932.8	35963.4	29065.5	33401.0	38224.3	35458.0
+
+# \begin{table}[]
+# \begin{tabular}{llllllll}
+#  & hrrr & rrfs\_control & rrfs\_mem0001 & rrfs\_mem0002 & rrfs\_mem0003 & rrfs\_mem0004 & rrfs\_mem0005 \\
+# BON & \textbf{24997.5} & 28553.7          & 37243.4 & 27012.6          & 32200.4 & 36217.7 & 29740.8 \\
+# DRA & 8402.4           & 8632.3           & 9422.1  & \textbf{7975.2}  & 8081.1  & 11095.1 & 8039.9  \\
+# FPK & 26704.8          & \textbf{24953.9} & 28106.7 & 26661.6          & 29377.2 & 35012.9 & 29400.1 \\
+# GWN & \textbf{25683.2} & 28310.2          & 36981.2 & 29643.5          & 30275.5 & 42974.1 & 26848.9 \\
+# PSU & \textbf{23566.0} & 27904.0          & 37367.7 & 27080.1          & 25836.3 & 39603.7 & 27490.6 \\
+# SXF & 24670.0          & \textbf{23732.9} & 31994.0 & 23959.9          & 27486.9 & 33334.4 & 25890.5 \\
+# TBL & 32541.5          & 29932.8          & 35963.4 & \textbf{29065.5} & 33401.0 & 38224.3 & 35458.0
+# \end{tabular}
+# \end{table}
+
+#   Site    Best Model      Error Variance
+# 0  bon          hrrr  24997.524556519576
+# 1  dra  rrfs_mem0002   7975.215971570438
+# 2  fpk  rrfs_control   24953.87667089987
+# 3  gwn          hrrr  25683.187523405424
+# 4  psu          hrrr   23566.02650126716
+# 5  sxf  rrfs_control  23732.912075318305
+# 6  tbl  rrfs_mem0002  29065.507266256864
