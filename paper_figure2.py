@@ -413,130 +413,6 @@ def plot_time_series(
         )
 
 
-def plot_composites(
-    surfrad_var: str,
-    nwp_var: str,
-    surfrad_ds: xr.Dataset,
-    nwp_ds: xr.Dataset,
-    nwp_masks: xr.Dataset,
-    surfrad_masks: xr.Dataset,
-    utc_shift: int,
-    colors: list = sns.color_palette("colorblind"),
-    fontsize: float = 16,
-    save_figs: bool = False,
-):
-    """
-    Visualize the forecast and observations by compositing
-    time series into daily values and errors.
-
-    Inputs:
-    surfrad_var: string
-        variable identifier for SURFRAD observations.
-    nwp_var: string
-        variable identifier for NWP forecast data.
-    surfrad_ds: xarray Dataset
-        Dataset containing SURFRAD observations.
-    nwp_ds: xarray Dataset
-        Dataset containing NWP forecast data.
-    nwp_masks: xarray Dataset
-        Dataset containing masks for each NWP variable.
-    surfrad_masks: xarray Dataset
-        Dataset containing masks for each obs variable.
-    utc_shift: integer
-        number of hours to shift data by to get a local time.
-        e.g. utc_shift = -6 sets the time coordinate to UTC - 6, or ~ET.
-    colors: list
-        list of objects that matplotlib can use as color input.
-    orientation: string
-        How to orient the figure panels: {"horizontal","vertical"}
-    save_figs: boolean
-        boolean indicating whether the figure should be saved.
-
-    Outputs:
-    None. Figure is produced and optionally saved.
-    """
-
-    nwp_mask = nwp_masks[nwp_var].sum(dim="time").load()
-    nwp_data = nwp_ds[nwp_var].where(surfrad_masks[surfrad_var])
-    surfrad_data = surfrad_ds[surfrad_var].where(nwp_mask).load()
-
-    nwp_data = nwp_data.assign_coords(
-        utc_shift=nwp_data.valid_time + np.timedelta64(utc_shift, "h")
-    )
-    surfrad_data = surfrad_data.assign_coords(
-        utc_shift=surfrad_data.valid_time + np.timedelta64(utc_shift, "h")
-    )
-
-    # Composite to show average days.
-    nwp_daily_composite = nwp_data.groupby("utc_shift.hour").mean()
-    surfrad_daily_composite = surfrad_data.groupby("utc_shift.hour").mean()
-    error_daily_composite = (nwp_data - surfrad_data).groupby("utc_shift.hour").mean()
-
-    fig, axs = plt.subplots(1, 2, figsize=(14, 5))
-    axs = axs.flat
-
-    # Plot the average daily fields.
-    ax = axs[0]
-    ax.plot(
-        surfrad_daily_composite.hour,
-        surfrad_daily_composite,
-        label="SURFRAD obs.",
-        color="black",
-        alpha=1.0,
-        linestyle="dashed",
-    )
-    for _nwp_source, _color in zip(nwp_daily_composite.nwp_source, colors):
-
-        _data = nwp_daily_composite.sel(nwp_source=_nwp_source)
-        if np.isnan(_data).all():
-            continue
-        ax.plot(
-            _data.hour,
-            _data,
-            label=str(_nwp_source.values),
-            color=_color,
-            alpha=0.5,
-            linestyle="solid",
-        )
-    ax.set_xlabel(f"Hour of the Day (UTC + {utc_shift})", fontsize=fontsize)
-    ax.set_ylabel(f"{surfrad_var.upper()} (Wm$^{-2}$)", fontsize=fontsize)
-    ax.set_title(f"Daily {surfrad_var.upper()} Composite", fontsize=fontsize)
-    ax.tick_params(axis="both", labelsize=fontsize - 2)
-    ax.legend()
-
-    # Plot the average daily error.
-    ax = axs[1]
-    for _nwp_source, _color in zip(error_daily_composite.nwp_source, colors):
-
-        _data = error_daily_composite.sel(nwp_source=_nwp_source)
-        if np.isnan(_data).all():
-            continue
-        ax.plot(
-            _data.hour,
-            _data,
-            label=str(_nwp_source.values),
-            color=_color,
-            alpha=0.5,
-            linestyle="solid",
-        )
-    ax.set_xlabel(f"Hour of the Day (UTC + {utc_shift})", fontsize=fontsize)
-    ax.set_ylabel(f"{surfrad_var.upper()} Error (Wm$^{-2}$)", fontsize=fontsize)
-    ax.set_title(f"Daily {surfrad_var.upper()} Error Composite", fontsize=fontsize)
-    ax.tick_params(axis="both", labelsize=fontsize - 2)
-    ax.legend()
-
-    if save_figs:
-        save_filename = (
-            f"CompositeError_{surfrad_var}_{datestring}_{surfrad_sitename}.png"
-        )
-        save_path = os.path.join(save_dir, save_filename)
-        fig.savefig(
-            save_path,
-            format="png",
-            bbox_inches="tight",
-        )
-
-
 def shift_and_reindex_time(
     data: xr.Dataset,
     data_var: str,
@@ -714,7 +590,7 @@ def plot_diurnal_whiskerplot(
         )
 
         ax.set_ylim(-750, 750)
-        ax.set_xlabel(f"Hour of the Day (UTC + {utc_shift})", fontsize=fontsize)
+        ax.set_xlabel(f"Local Time", fontsize=fontsize)
         ax.set_ylabel(f"{surfrad_var.upper()} Error (Wm$^{-2}$)", fontsize=fontsize)
         ax.set_title(
             f"{str(_nwp_source.values)}",
@@ -746,7 +622,6 @@ if __name__ == "__main__":
     surfrad_var = "ghi"
     surfrad_clearsky_var = f"clearsky_{surfrad_var}"
     nwp_var = "dswrf"
-    utc_shift = -6
 
     save_dir = os.path.join(
         "figures",
@@ -783,16 +658,21 @@ if __name__ == "__main__":
         2,
         figsize=(10, 25),
     )
-    fig2, axs2 = plt.subplots(
-        7,
-        2,
-        figsize=(10, 25),
-    )
-    # fig.subplots_adjust(wspace=0.3, hspace=0.3)
 
     surfrad_sitenames = ["dra", "tbl", "fpk", "sxf", "bon", "gwn", "psu"]
-    for surfrad_sitename, _axs, _axs2 in zip(surfrad_sitenames, axs, axs2):
+    utc_shift_dict = {
+        "dra": -8,
+        "tbl": -7,
+        "fpk": -7,
+        "sxf": -6,
+        "bon": -6,
+        "gwn": -6,
+        "psu": -5,
+    }
+    # localtime_offsets
+    for surfrad_sitename, _axs in zip(surfrad_sitenames, axs):
         print(f"Processing {surfrad_sitename.upper()}")
+        utc_shift = utc_shift_dict[surfrad_sitename]
 
         surfrad_ds, surfrad_masks = load_and_mask_surfrad(
             load_path,
@@ -825,78 +705,47 @@ if __name__ == "__main__":
             orientation="horizontal",
             num_panels_dim=1,
             whis=(2.5, 97.5),
-            showfliers=True,
-            save_figs=save_figs,
-            axs=_axs,
-        )
-
-        _axs2b = plot_diurnal_whiskerplot(
-            surfrad_var=surfrad_var,
-            nwp_var=nwp_var,
-            surfrad_ds=surfrad_ds,
-            nwp_ds=nwp_dayahead_ds.sel(nwp_source=["hrrr", "rrfs_control"], location=surfrad_sitename).drop_vars("location"),
-            nwp_masks=nwp_masks.sel(location=surfrad_sitename).drop_vars("location"),
-            surfrad_masks=surfrad_masks,
-            utc_shift=utc_shift,
-            meteo_mask=None,
-            orientation="horizontal",
-            num_panels_dim=1,
-            whis=(2.5, 97.5),
             showfliers=False,
             save_figs=save_figs,
-            axs=_axs2,
+            axs=_axs,
         )
 
         # %%
         # Correct the figure axes for readability.
         panel_letters = ['a.', 'b.', 'c.', 'd.', 'e.', 'f.', 'g.', 'h.', 'i.', 'j.', 'k.', 'l.', 'm.', 'n.']
         panel_labels = []
-        # Figure with fliers
+
         for i, let in enumerate(panel_letters):
             surfrad_sitename = surfrad_sitenames[i // 2]
             panel_labels.append(f"{let} {surfrad_sitename.upper()}")
-        # panel_labels = [f"{i} {surfrad_sitename.upper()}" for i in panel_letters]
         for ax, panel_label in zip(axs.flat, panel_labels):
             ax.set_title("")
             ax.annotate(panel_label, xy=(0.05, 0.9), xycoords="axes fraction", fontsize=16)
-            ax.set_ylim(-1000, 1000)
-            # ax.annotate(surfrad_sitename.upper(), xy=(0.05, 0.9), xycoords="axes fraction", fontsize=16)
+            ax.set_xticks(range(0, 25, 2))
+            ax.set_xlim(4.5, 19.5)
+            ax.set_ylim(-750, 750)
+            ax.xaxis.set_major_locator(plt.MultipleLocator(6))
+            ax.xaxis.set_minor_locator(plt.MultipleLocator(2))
+            ax.tick_params(which='major', length=8)
+            ax.tick_params(which='minor', length=4)
         for ax in axs.flat[:-2]:
             ax.set_xlabel("")
+            ax.set_xticklabels([])
         for ax in axs[:, 1]:
             ax.set_ylabel("")
+            ax.set_yticklabels([])
         axs[0, 0].set_title("HRRR", fontsize=16)
         axs[0, 1].set_title("RRFS Control", fontsize=16)
+        fig.subplots_adjust(wspace=0.1)
 
-        # Figure without fliers
-        for i, let in enumerate(panel_letters):
-            surfrad_sitename = surfrad_sitenames[i // 2]
-            panel_labels.append(f"{let} {surfrad_sitename.upper()}")
-        # panel_labels = [f"{i} {surfrad_sitename.upper()}" for i in panel_letters]
-        for ax, panel_label in zip(axs2.flat, panel_labels):
-            ax.set_title("")
-            ax.annotate(panel_label, xy=(0.05, 0.9), xycoords="axes fraction", fontsize=16)
-            ax.set_ylim(-750, 750)
-            # ax.annotate(surfrad_sitename.upper(), xy=(0.05, 0.9), xycoords="axes fraction", fontsize=16)
-        for ax in axs2.flat[:-2]:
-            ax.set_xlabel("")
-        for ax in axs2[:, 1]:
-            ax.set_ylabel("")
-        axs2[0, 0].set_title("HRRR", fontsize=16)
-        axs2[0, 1].set_title("RRFS Control", fontsize=16)
     # %%
     fig.savefig(
-        os.path.join(save_dir, f"DiurnalWhisker_{surfrad_var}_{datestring}_fliers.png"),
+        os.path.join(save_dir, f"DiurnalWhisker_{surfrad_var}_{datestring}_localtime.png"),
         format="png",
         bbox_inches="tight",
         dpi=200,
     )
-    fig2.savefig(
-        os.path.join(save_dir, f"DiurnalWhisker_{surfrad_var}_{datestring}_nofliers.png"),
-        format="png",
-        bbox_inches="tight",
-        dpi=200,
-    )
+
     # Figure caption:
     # Hourly box and whisker plots of surface downwelling shortwave radiation error
     # (Wm$^{-2}$) for HRRR and RRFS Control forecasts relative to SURFRAD observations at each SURFRAD site. Whiskers span a 95% confidence interval.

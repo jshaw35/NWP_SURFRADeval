@@ -59,59 +59,6 @@ def mask_nwp_by_availability(
     return ds, xr.merge(masks)
 
 
-def nwp_timeseries_comparison(
-    nwp_ds: xr.DataArray,
-    surfrad_ds: xr.DataArray,
-    colors: list,
-    time_dim: str = "valid_time",
-    ax: plt.axis = None,
-):
-    """
-    Simple script to visualize observations and forecasts as
-    time series.
-
-    Inputs:
-    nwp_ds: xarray DataArray
-        DataArray containing multiple forecasts along the "nwp_source" dimension.
-    surfrad_ds: xarray DataArray
-        DataArray containing surfrad observations.
-    colors: list
-        list of strings corresponding to lineplot colors.
-    time_dim: string
-        identifier for the time dimension for both datasets.
-    ax: matplotlib axis
-        optional matplotlib axis to plot along.
-    """
-
-    if ax is None:
-        fig, ax = plt.subplots(1, 1, figsize=(8, 5))
-
-    if surfrad_ds is not None:
-        ax.plot(
-            surfrad_ds[time_dim],
-            surfrad_ds,
-            color="black",
-            label="SURFRAD Obs.",
-            linestyle="dashed",
-        )
-
-    for _nwp_source, _color in zip(nwp_ds.nwp_source, colors):
-
-        nwp_data = nwp_ds.sel(nwp_source=_nwp_source)
-        label_str = str(_nwp_source.values)
-        ax.plot(
-            nwp_data[time_dim],
-            nwp_data,
-            color=_color,
-            label=label_str,
-        )
-
-    if "fig" in locals():
-        return fig, ax
-    else:
-        return ax
-
-
 def reindex_dataset(
     ds: xr.Dataset,
     var_name: str,
@@ -346,27 +293,23 @@ def shift_and_reindex_time(
     return data_reindexed
 
 
-def plot_clearsky_diurnal_whiskerplot(
+def plot_rank_histogram(
     surfrad_var: str,
     nwp_var: str,
     surfrad_ds: xr.Dataset,
     nwp_ds: xr.Dataset,
     nwp_masks: xr.DataArray,
     surfrad_masks: xr.DataArray,
-    utc_shift: int,
+    ens_members: list,
     meteo_mask: xr.DataArray = None,
     meteo_name: str = None,
     fontsize: float = 16,
-    axs: np.ndarray = None,
-    orientation: str = "horizontal",
-    num_panels_dim: int = 2,
-    whis: float or (float, float) = 1.5,
-    showfliers: bool = False,
+    ax=None,
     save_figs: bool = False,
 ):
     """
-    Visualize the error and show the spread for each hour 
-    of the day using box and whisker plots.
+    Quantify the spread of the RRFS members using a rank histogram.
+    Optionally use a meteorological conditions masks as well.
 
     Inputs:
     surfrad_var: string
@@ -381,34 +324,28 @@ def plot_clearsky_diurnal_whiskerplot(
         Dataset containing masks for each NWP variable.
     surfrad_masks: xarray Dataset
         Dataset containing masks for each obs variable.
-    utc_shift: integer
-        number of hours to shift data by to get a local time.
-        e.g. utc_shift = -6 sets the time coordinate to UTC - 6, or ~ET.
+    ens_members: list
+        list of string identifiers for the "nwp_source" dimension.
     meteo_mask: xarray Dataset
         Mask for meteorological conditions.
     meteo_name: string
         String appended to output file name to identify the mask.
     fontsize: float
         float for determining figure fontsizes
-    orientation: string
-        How to orient the figure panels: {"horizontal","vertical"}
-    num_panels_dim: integer
-        Number of panels to allow along the non-orientation dimension.
-    whis: float or (float, float)
-        The reach of the whiskers to the box length.
-        See matplotlib boxplot documentation for details.
-    show_fliers: boolean
-        Whether to show outliers in the box and whisker plot.
+    ax: matplotlib axis
+        axis to plot on. If None, then a new figure and axis is created.
     save_figs: boolean
         boolean indicating whether the figure should be saved.
     """
 
-    surfrad_clearsky_var = f"clearsky_{surfrad_var}"
+    nwp_data = nwp_ds[nwp_var].sel(nwp_source=ens_members)
+    surfrad_data = surfrad_ds[surfrad_var].load()
 
+    # Apply masking by availability, sun position, and meteorology.
     nwp_mask = nwp_masks[nwp_var].sum(dim="time")
     surfrad_mask = surfrad_masks[surfrad_var]
-
-    all_mask = nwp_mask & surfrad_mask
+    zenith_mask = surfrad_ds.zenith < 80
+    all_mask = nwp_mask & surfrad_mask & zenith_mask
     if meteo_mask is not None:
         # Need to convert the mask to the valid_time dimension.
         meteo_days = meteo_mask.dayofyear.isel(dayofyear=meteo_mask)
@@ -417,103 +354,45 @@ def plot_clearsky_diurnal_whiskerplot(
     else:
         meteo_name = None
 
-    nwp_data = nwp_ds[nwp_var].where(all_mask).load()
-    surfrad_data = surfrad_ds[surfrad_var].where(all_mask).load()
-    clearsky_data = surfrad_ds[surfrad_clearsky_var].where(all_mask).load()
+    # Compute rank for each timestep.
+    rank = (surfrad_data > nwp_data).sum(dim="nwp_source").where(all_mask)
+    bins = np.arange(-0.5, len(ens_members) + 0.51, 1)
 
-    nwp_reindexed = shift_and_reindex_time(
-        nwp_data,
-        nwp_var,
-        "valid_time",
-        utc_shift=utc_shift,
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(6, 5))
+    ax.hist(
+        rank,
+        bins=bins,
+        color="blue",
+        alpha=0.8,
     )
-    surfrad_reindexed = shift_and_reindex_time(
-        surfrad_data,
-        surfrad_var,
-        "valid_time",
-        utc_shift=utc_shift,
+    ax.hlines(
+        all_mask.sum() / (len(ens_members) + 1),
+        bins[0],
+        bins[-1],
+        color="black",
+        linestyle="dashed",
     )
-    clearsky_reindexed = shift_and_reindex_time(
-        clearsky_data,
-        surfrad_var,
-        "valid_time",
-        utc_shift=utc_shift,
+    ax.set_xlabel(
+        "Observations Rank",
+        fontsize=fontsize,
     )
-
-    csi_error_reindexed = (nwp_reindexed - surfrad_reindexed) / clearsky_reindexed
-
-    # Create the figure and axes if not provided
-    if axs is None:
-        num_panels = len(csi_error_reindexed.nwp_source)
-        panel_size = 6
-        if orientation == "horizontal":
-            fig, axs = plt.subplots(
-                num_panels_dim,
-                int(np.ceil((num_panels) / num_panels_dim)),
-                figsize=(
-                    panel_size * np.ceil(num_panels / num_panels_dim),
-                    panel_size * num_panels_dim,
-                ),
-            )
-            fig.subplots_adjust(wspace=0.38, hspace=0.25)
-
-        if orientation == "vertical":
-            fig, axs = plt.subplots(
-                int(np.ceil((num_panels) / num_panels_dim)),
-                num_panels_dim,
-                figsize=(
-                    panel_size * num_panels_dim,
-                    panel_size * np.ceil(num_panels / num_panels_dim),
-                ),
-            )
-            fig.subplots_adjust(wspace=0.3, hspace=0.25)
-        axs = [*axs.flat]
-
-    colors = [sns.color_palette("colorblind")[0] for i in axs]
-    for _nwp_source, ax, _color in zip(csi_error_reindexed.nwp_source, axs, colors):
-        error_data = csi_error_reindexed.sel(nwp_source=_nwp_source)
-
-        # Convert error data to a format suitable for box plots
-        error_values_by_hour = [error_data.sel(hour=h).values.flatten() for h in range(24)]
-        # Filter out NaN values
-        error_values_by_hour = [errors[~np.isnan(errors)] for errors in error_values_by_hour]
-
-        # Only include hours that have data (typically daylight hours)
-        valid_hours = [h for h in range(24) if len(error_values_by_hour[h]) > 0]
-        valid_error_values = [error_values_by_hour[h] for h in valid_hours]
-
-        # Create box plot
-        box_parts = ax.boxplot(
-            valid_error_values,
-            positions=valid_hours,
-            patch_artist=True,
-            widths=0.7,
-            whis=whis,
-            showfliers=showfliers,  # Hide outliers for cleaner visualization
-            medianprops={'color': 'black'},
-            boxprops={'facecolor': _color, 'alpha': 0.5},
-        )
-
-        ax.set_xlabel(f"Local Time", fontsize=fontsize)
-        ax.set_ylabel(f"Clear-Sky Index Error", fontsize=fontsize)
-        ax.set_title(
-            f"{str(_nwp_source.values)}",
-            fontsize=fontsize,
-        )
-        ax.set_xticks(range(0, 25, 6))
-        ax.set_xticklabels(range(0, 25, 6))
-        ax.tick_params(axis="both", labelsize=fontsize - 2)
+    ax.set_ylabel("Count",fontsize=fontsize)
+    if meteo_mask:
+        title_str = f"{surfrad_var.upper()} rank histogram at {surfrad_sitename} during {meteo_name}"
+    else:
+        title_str = f"{surfrad_var.upper()} rank histogram at {surfrad_sitename}"
+    ax.set_title(title_str, fontsize=fontsize)
+    ax.tick_params(axis="both", labelsize=fontsize - 4)
 
     if save_figs:
-        save_filename = f"DailyErrorPanels_{meteo_name}_{surfrad_var}_{datestring}_{surfrad_sitename}.png"
+        save_filename = f"RankHistogram_{meteo_name}_{surfrad_var}_{datestring}_{surfrad_sitename}.png"
         save_path = os.path.join(save_dir, save_filename)
         fig.savefig(
             save_path,
             format="png",
             bbox_inches="tight",
         )
-
-    return axs
 
 
 # %%
@@ -522,10 +401,17 @@ if __name__ == "__main__":
     # Specify input and output fields and naming.
     load_path = "data/processed_timeseries"
     save_figs = False
+    showfliers = False
 
     surfrad_var = "ghi"
     surfrad_clearsky_var = f"clearsky_{surfrad_var}"
     nwp_var = "dswrf"
+
+    # morning_hours = [5, 11]
+    # afternoon_hours = [13, 19]
+    # Results appear insensitive to how morning/afternoon are defined.
+    morning_hours = [7, 11]
+    afternoon_hours = [13, 17]
 
     save_dir = os.path.join(
         "figures",
@@ -573,7 +459,7 @@ if __name__ == "__main__":
         "gwn": -6,
         "psu": -5,
     }
-    for surfrad_sitename, _axs in zip(surfrad_sitenames, axs):
+    for surfrad_sitename, _ax in zip(surfrad_sitenames, axs):
         print(f"Processing {surfrad_sitename.upper()}")
         utc_shift = utc_shift_dict[surfrad_sitename]
 
@@ -590,65 +476,126 @@ if __name__ == "__main__":
             data_datetime_end,
             nwp_datavars,
         )
+        nwp_ds = nwp_ds.sel(location=surfrad_sitename).drop_vars("location")
+        nwp_masks = nwp_masks.sel(location=surfrad_sitename).drop_vars("location")
+
+        # Create morning and afternoon masks. 
+        # Neither of these plays nice with implied bitwise comparisons
+        surfrad_morning_mask = ((surfrad_masks[surfrad_var].valid_time.dt.hour + utc_shift) % 24 >= morning_hours[0]).values & \
+        ((surfrad_masks[surfrad_var].valid_time.dt.hour + utc_shift) % 24 <= morning_hours[1]).values
+
+        surfrad_afternoon_mask = ((surfrad_masks[surfrad_var].valid_time.dt.hour + utc_shift) % 24 >= afternoon_hours[0]).values & \
+        ((surfrad_masks[surfrad_var].valid_time.dt.hour + utc_shift) % 24 <= afternoon_hours[1]).values
+        
+        surfrad_morning_mask = np.bitwise_and(
+            (surfrad_masks[surfrad_var].valid_time.dt.hour + utc_shift) % 24 >= morning_hours[0],
+            (surfrad_masks[surfrad_var].valid_time.dt.hour + utc_shift) % 24 <= morning_hours[1]
+        )
+        surfrad_afternoon_mask = np.bitwise_and(
+            (surfrad_masks[surfrad_var].valid_time.dt.hour + utc_shift) % 24 >= afternoon_hours[0],
+            (surfrad_masks[surfrad_var].valid_time.dt.hour + utc_shift) % 24 <= afternoon_hours[1]
+        )
 
         # Collapse the forecast time dimension so the forecasts
         # appear as a timeseries. Must select a <= 24 hour forecast
         # window so there are no forecast overlaps.
         nwp_dayahead_ds = nwp_ds.sum(dim="time", min_count=1).load()
 
-        _axsb = plot_clearsky_diurnal_whiskerplot(
+        # A more involved example applying masks for different
+        # meteorological conditions and creating separate plots.
+        nwp_mask = nwp_masks[nwp_var].sum(dim="time")
+        obs_mask = surfrad_masks[surfrad_var]
+        nwp_data = nwp_dayahead_ds[nwp_var].where(obs_mask)
+        surfrad_data = surfrad_ds[surfrad_var].where(nwp_mask).load()
+
+        surfrad_reindexed = shift_and_reindex_time(
+            surfrad_data,
+            surfrad_var,
+            "valid_time",
+            utc_shift=utc_shift,
+        )
+
+        # Compute the clear-sky index
+        clearsky_index_data = surfrad_reindexed / surfrad_reindexed[surfrad_clearsky_var]
+        clearsky_index_data = clearsky_index_data.where(surfrad_reindexed.zenith < 80)
+
+        daily_csi_mean = clearsky_index_data.mean(dim="hour")
+        daily_csi_stddev = clearsky_index_data.std(dim="hour")
+
+        # Somewhat adhoc classifications from looking at the data.
+        clear_mask = daily_csi_mean > 0.95
+        broken_mask = np.bitwise_and(
+            ~clear_mask,
+            daily_csi_mean + 2 * daily_csi_stddev > 0.92
+        )
+        cloudy_mask = ~np.bitwise_or(clear_mask, broken_mask)
+
+        # Collapse the forecast time dimension so the forecasts
+        # appear as a timeseries. Must select a <= 24 hour forecast
+        # window so there are no forecast overlaps.
+        nwp_dayahead_ds = nwp_ds.sum(dim="time", min_count=1).load()
+
+        rrfs_members = [
+            "rrfs_control",
+            "rrfs_mem0001",
+            "rrfs_mem0002",
+            "rrfs_mem0003",
+            "rrfs_mem0004",
+            "rrfs_mem0005",
+        ]
+        plot_rank_histogram(
             surfrad_var=surfrad_var,
             nwp_var=nwp_var,
             surfrad_ds=surfrad_ds,
-            nwp_ds=nwp_dayahead_ds.sel(nwp_source=["hrrr", "rrfs_control"], location=surfrad_sitename).drop_vars("location"),
-            nwp_masks=nwp_masks.sel(location=surfrad_sitename).drop_vars("location"),
-            surfrad_masks=surfrad_masks & (surfrad_ds.zenith < 80),
-            utc_shift=utc_shift,
-            meteo_mask=None,
-            orientation="horizontal",
-            num_panels_dim=1,
-            whis=(2.5, 97.5),
-            showfliers=False,
+            nwp_ds=nwp_dayahead_ds,
+            nwp_masks=nwp_masks,
+            surfrad_masks=surfrad_masks & surfrad_morning_mask,
+            ens_members=rrfs_members,
+            ax=_ax[0],
             save_figs=save_figs,
-            axs=_axs,
         )
+        plot_rank_histogram(
+            surfrad_var=surfrad_var,
+            nwp_var=nwp_var,
+            surfrad_ds=surfrad_ds,
+            nwp_ds=nwp_dayahead_ds,
+            nwp_masks=nwp_masks,
+            surfrad_masks=surfrad_masks & surfrad_afternoon_mask,
+            ens_members=rrfs_members,
+            ax=_ax[1],
+            save_figs=save_figs,
+        )
+        # break
 
         # %%
-        # Correct the figure axes for readability.
-        panel_letters = ['a.', 'b.', 'c.', 'd.', 'e.', 'f.', 'g.', 'h.', 'i.', 'j.', 'k.', 'l.', 'm.', 'n.']
-        panel_labels = []
-        # Figure with fliers
-        for i, let in enumerate(panel_letters):
-            surfrad_sitename = surfrad_sitenames[i // 2]
-            panel_labels.append(f"{let} {surfrad_sitename.upper()}")
-        for ax, panel_label in zip(axs.flat, panel_labels):
-            ax.set_title("")
-            ax.annotate(panel_label, xy=(0.05, 0.04), xycoords="axes fraction", fontsize=16)
-            ax.set_ylim(-0.8, 0.8)
-            ax.set_xlim(5.5, 18.5)
-            ax.xaxis.set_major_locator(plt.MultipleLocator(6))
-            ax.xaxis.set_minor_locator(plt.MultipleLocator(2))
-            ax.tick_params(which='major', length=8)
-            ax.tick_params(which='minor', length=4)
-            ax.hlines(0, 5.5, 18.5, color='gray', linestyle='dashed', linewidth=1, zorder=1)
-        for ax in axs.flat[:-2]:
-            ax.set_xlabel("")
-            ax.set_xticklabels([])
-        for ax in axs[:, 1]:
-            ax.set_ylabel("")
-            ax.set_yticklabels([])
-        axs[0, 0].set_title("HRRR", fontsize=16)
-        axs[0, 1].set_title("RRFS Control", fontsize=16)
-        fig.subplots_adjust(wspace=0.1)#, hspace=0.3)
+    # Correct the figure axes for readability.
+    panel_letters = ['a.', 'b.', 'c.', 'd.', 'e.', 'f.', 'g.', 'h.', 'i.', 'j.', 'k.', 'l.', 'm.', 'n.']
+    panel_labels = []
+    for i, let in enumerate(panel_letters):
+        surfrad_sitename = surfrad_sitenames[i // 2]
+        panel_labels.append(f"{let} {surfrad_sitename.upper()}")
+    for ax, panel_label in zip(axs.flat, panel_labels):
+        ax.set_title("")
+        ax.annotate(panel_label, xy=(0.02, 0.90), xycoords="axes fraction", fontsize=12)
+        ax.set_ylim(0, 300)
+    for ax in axs[0,:]:
+        ax.set_ylim(0, 500) # Use separate limits for the top row
+    for ax in axs.flat[:-2]:
+        ax.set_xlabel("")
+    for ax in axs[:, 1]:
+        ax.set_ylabel("")
+    axs[0, 0].set_title(f"Morning ({morning_hours[0]} - {morning_hours[1]} Local Time)", fontsize=16)
+    axs[0, 1].set_title(f"Afternoon ({afternoon_hours[0]} - {afternoon_hours[1]} Local Time)", fontsize=16)
 
     # %%
+
     fig.savefig(
-        os.path.join(save_dir, f"DiurnalWhisker_clearsky_{surfrad_var}_{datestring}_localtime.png"),
+        os.path.join(save_dir, f"RankHistogram_{surfrad_var}_{datestring}_{morning_hours[0]}_{morning_hours[1]}_{afternoon_hours[0]}_{afternoon_hours[1]}.png"),
         format="png",
         bbox_inches="tight",
         dpi=200,
     )
+
     # Figure caption:
-    # Hourly box and whisker plots of surface downwelling shortwave radiation error
-    # (Wm$^{-2}$) for HRRR and RRFS Control forecasts relative to SURFRAD observations at each SURFRAD site. Whiskers span a 95% confidence interval.
+    # Rank histograms for morning (left column) and afternoon (right column) hours at each SURFRAD site. Observation rank is computed relative to a 6-member RRFS ensemble forecast (RRFS Control and 5 ensemble members). Dashed horizontal lines indicate the rank histogram of an ideally dispersed ensemble. Morning and afternoon hours are calculated with each site's local time without daylight savings time adjustments.
     # %%
