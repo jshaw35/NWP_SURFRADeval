@@ -487,7 +487,7 @@ def plot_diurnal_whiskerplot(
         )
 
         ax.set_ylim(-750, 750)
-        ax.set_xlabel(f"Hour of the Day (UTC + {utc_shift})", fontsize=fontsize)
+        ax.set_xlabel(f"Local Time", fontsize=fontsize)
         ax.set_ylabel(f"{surfrad_var.upper()} Error (Wm$^{-2}$)", fontsize=fontsize)
         ax.set_title(
             f"{str(_nwp_source.values)}",
@@ -739,7 +739,7 @@ if __name__ == "__main__":
     print(error_stddevs_conditions["cloudy"].to_dataframe())
     print(N_stddevs_conditions["cloudy"].to_dataframe())
     # %%
-    
+
     error_stddevs_conditions.to_dataframe().to_csv("data/figure_outputs/error_stddev_cloud_conditions.csv")
     N_stddevs_conditions.to_dataframe().to_csv("data/figure_outputs/N_cloud_conditions.csv")
     # %%
