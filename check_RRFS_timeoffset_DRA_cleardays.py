@@ -708,12 +708,13 @@ if __name__ == "__main__":
     daily_csi_stddev = clearsky_index_data.std(dim="hour")
 
     # Somewhat adhoc classifications from looking at the data.
+    empty_mask = daily_csi_mean.isnull()
     clear_mask = daily_csi_mean > 0.95
     broken_mask = np.bitwise_and(
         ~clear_mask,
         daily_csi_mean + 2 * daily_csi_stddev > 0.92
     )
-    cloudy_mask = ~np.bitwise_or(clear_mask, broken_mask)
+    cloudy_mask = ~(clear_mask | broken_mask | empty_mask)
 
     # Sanity check composite for all days.
     plot_composites(
