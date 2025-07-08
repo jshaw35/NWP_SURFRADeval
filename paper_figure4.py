@@ -17,7 +17,6 @@ from datetime import timedelta
 import seaborn as sns
 import glob
 
-
 def mask_nwp_by_availability(
     ds: xr.Dataset,
     mask_vars: list,
@@ -362,6 +361,7 @@ def plot_diurnal_whiskerplot(
     num_panels_dim: int = 2,
     whis: float or (float, float) = 1.5,
     showfliers: bool = False,
+    nwp_sources: list = ["hrrr", "rrfs_control"],
 ):
     """
     Visualize the error and show the spread for each hour 
@@ -457,6 +457,11 @@ def plot_diurnal_whiskerplot(
 
     stddevs = []
     colors = [sns.color_palette("colorblind")[0] for i in axs]
+    for _nwp_source in nwp_error_reindexed.nwp_source:
+        error_data = nwp_error_reindexed.sel(nwp_source=_nwp_source)
+        error_stddev = error_data.where(surfrad_reindexed.zenith < 80).std()
+        stddevs.append(error_stddev)
+
     for _nwp_source, ax, _color in zip(nwp_error_reindexed.nwp_source, axs, colors):
         error_data = nwp_error_reindexed.sel(nwp_source=_nwp_source)
 
@@ -465,38 +470,39 @@ def plot_diurnal_whiskerplot(
         # # other error metrics.
         error_stddev = error_data.where(surfrad_reindexed.zenith < 80).std()
 
-        # Convert error data to a format suitable for box plots
-        error_values_by_hour = [error_data.sel(hour=h).values.flatten() for h in range(24)]
-        # Filter out NaN values
-        error_values_by_hour = [errors[~np.isnan(errors)] for errors in error_values_by_hour]
+        # Only plot if the source is in the list of sources to plot.
+        if _nwp_source in nwp_sources:
+            # Convert error data to a format suitable for box plots
+            error_values_by_hour = [error_data.sel(hour=h).values.flatten() for h in range(24)]
+            # Filter out NaN values
+            error_values_by_hour = [errors[~np.isnan(errors)] for errors in error_values_by_hour]
 
-        # Only include hours that have data (typically daylight hours)
-        valid_hours = [h for h in range(24) if len(error_values_by_hour[h]) > 0]
-        valid_error_values = [error_values_by_hour[h] for h in valid_hours]
+            # Only include hours that have data (typically daylight hours)
+            valid_hours = [h for h in range(24) if len(error_values_by_hour[h]) > 0]
+            valid_error_values = [error_values_by_hour[h] for h in valid_hours]
 
-        # Create box plot
-        box_parts = ax.boxplot(
-            valid_error_values,
-            positions=valid_hours,
-            patch_artist=True,
-            widths=0.7,
-            whis=whis,
-            showfliers=showfliers,  # Hide outliers for cleaner visualization
-            medianprops={'color': 'black'},
-            boxprops={'facecolor': _color, 'alpha': 0.5}
-        )
+            # Create box plot
+            box_parts = ax.boxplot(
+                valid_error_values,
+                positions=valid_hours,
+                patch_artist=True,
+                widths=0.7,
+                whis=whis,
+                showfliers=showfliers,  # Hide outliers for cleaner visualization
+                medianprops={'color': 'black'},
+                boxprops={'facecolor': _color, 'alpha': 0.5}
+            )
 
-        ax.set_ylim(-750, 750)
-        ax.set_xlabel(f"Local Time", fontsize=fontsize)
-        ax.set_ylabel(f"{surfrad_var.upper()} Error (Wm$^{-2}$)", fontsize=fontsize)
-        ax.set_title(
-            f"{str(_nwp_source.values)}",
-            fontsize=fontsize,
-        )
-        ax.set_xticks(range(0, 25, 6))
-        ax.set_xticklabels(range(0, 25, 6))
-        ax.tick_params(axis="both", labelsize=fontsize - 2)
-        stddevs.append(error_stddev)
+            ax.set_ylim(-750, 750)
+            ax.set_xlabel(f"Local Time", fontsize=fontsize)
+            ax.set_ylabel(f"{surfrad_var.upper()} Error (Wm$^{-2}$)", fontsize=fontsize)
+            ax.set_title(
+                f"{str(_nwp_source.values)}",
+                fontsize=fontsize,
+            )
+            ax.set_xticks(range(0, 25, 6))
+            ax.set_xticklabels(range(0, 25, 6))
+            ax.tick_params(axis="both", labelsize=fontsize - 2)
 
     return xr.DataArray(stddevs, dims="nwp_source", coords={"nwp_source":nwp_error_reindexed.nwp_source.values})
 
@@ -570,7 +576,8 @@ if __name__ == "__main__":
         "psu": -5,
     }
     stddev_list = []
-    N_list = []
+    Ndays_list = []
+    Nhours_list = []
     for surfrad_sitename, _axs1, _axs2, _axs3 in zip(surfrad_sitenames, axs1, axs2, axs3):
         print(f"Processing {surfrad_sitename.upper()}")
         utc_shift = utc_shift_dict[surfrad_sitename]
@@ -588,7 +595,7 @@ if __name__ == "__main__":
             data_datetime_end,
             nwp_datavars,
         )
-        nwp_ds = nwp_ds.sel(nwp_source=["hrrr", "rrfs_control"], location=surfrad_sitename).drop_vars("location")
+        nwp_ds = nwp_ds.sel(nwp_source=["hrrr", "rrfs_control", "rrfs_mem0002"], location=surfrad_sitename).drop_vars("location")
         nwp_masks = nwp_masks.sel(location=surfrad_sitename).drop_vars("location")
 
         # Collapse the forecast time dimension so the forecasts
@@ -618,17 +625,23 @@ if __name__ == "__main__":
         daily_csi_stddev = clearsky_index_data.std(dim="hour")
 
         # Somewhat adhoc classifications from looking at the data.
+        empty_mask = daily_csi_mean.isnull()
         clear_mask = daily_csi_mean > 0.95
         broken_mask = np.bitwise_and(
             ~clear_mask,
             daily_csi_mean + 2 * daily_csi_stddev > 0.92
         )
-        cloudy_mask = ~np.bitwise_or(clear_mask, broken_mask)
+        cloudy_mask = ~(clear_mask | broken_mask | empty_mask)
 
         # Count the number of days for each cloud condition category.
-        clear_N = clear_mask.sum()
-        broken_N = broken_mask.sum()
-        cloudy_N = cloudy_mask.sum()
+        clear_Ndays = clear_mask.sum()
+        broken_Ndays = broken_mask.sum()
+        cloudy_Ndays = cloudy_mask.sum()
+
+        # Count the number of hourly timesteps for each cloud condition category.
+        clear_Nhours = clearsky_index_data.where(clear_mask).count(dim=["dayofyear", "hour"])
+        broken_Nhours = clearsky_index_data.where(broken_mask).count(dim=["dayofyear", "hour"])
+        cloudy_Nhours = clearsky_index_data.where(cloudy_mask).count(dim=["dayofyear", "hour"])
 
         # Collapse the forecast time dimension so the forecasts
         # appear as a timeseries. Must select a <= 24 hour forecast
@@ -640,7 +653,7 @@ if __name__ == "__main__":
             surfrad_var=surfrad_var,
             nwp_var=nwp_var,
             surfrad_ds=surfrad_ds,
-            nwp_ds=nwp_dayahead_ds,
+            nwp_ds=nwp_dayahead_ds.sel(nwp_source=["hrrr", "rrfs_control", "rrfs_mem0002"]),
             nwp_masks=nwp_masks,
             surfrad_masks=surfrad_masks,
             utc_shift=utc_shift,
@@ -652,14 +665,15 @@ if __name__ == "__main__":
             axs=_axs1,
         )
         clear_stddevs.name = "clear"
-        clear_N.name = "clear"
+        clear_Ndays.name = "clear"
+        clear_Nhours.name = "clear"
 
         # Broken clouds (partly cloudy)
         broken_stddevs = plot_diurnal_whiskerplot(
             surfrad_var=surfrad_var,
             nwp_var=nwp_var,
             surfrad_ds=surfrad_ds,
-            nwp_ds=nwp_dayahead_ds,
+            nwp_ds=nwp_dayahead_ds.sel(nwp_source=["hrrr", "rrfs_control", "rrfs_mem0002"]),
             nwp_masks=nwp_masks,
             surfrad_masks=surfrad_masks,
             utc_shift=utc_shift,
@@ -671,14 +685,15 @@ if __name__ == "__main__":
             axs=_axs2,
         )
         broken_stddevs.name = "broken"
-        broken_N.name = "broken"
+        broken_Ndays.name = "broken"
+        broken_Nhours.name = "broken"
 
         # Overcast
         cloudy_stddevs = plot_diurnal_whiskerplot(
             surfrad_var=surfrad_var,
             nwp_var=nwp_var,
             surfrad_ds=surfrad_ds,
-            nwp_ds=nwp_dayahead_ds,
+            nwp_ds=nwp_dayahead_ds.sel(nwp_source=["hrrr", "rrfs_control", "rrfs_mem0002"]),
             nwp_masks=nwp_masks,
             surfrad_masks=surfrad_masks,
             utc_shift=utc_shift,
@@ -690,13 +705,19 @@ if __name__ == "__main__":
             axs=_axs3,
         )
         cloudy_stddevs.name = "cloudy"
-        cloudy_N.name = "cloudy"
+        cloudy_Ndays.name = "cloudy"
+        cloudy_Nhours.name = "cloudy"
+
         error_stddevs_conditions = xr.merge([clear_stddevs, broken_stddevs, cloudy_stddevs]).assign_coords(location=surfrad_sitename).expand_dims("location")
-        N_conditions = xr.merge([clear_N, broken_N, cloudy_N]).assign_coords(location=surfrad_sitename).expand_dims("location")
+        Ndays_conditions = xr.merge([clear_Ndays, broken_Ndays, cloudy_Ndays]).assign_coords(location=surfrad_sitename).expand_dims("location")
+        Nhours_conditions = xr.merge([clear_Nhours, broken_Nhours, cloudy_Nhours]).assign_coords(location=surfrad_sitename).expand_dims("location")
         stddev_list.append(error_stddevs_conditions)
-        N_list.append(N_conditions)
+        Ndays_list.append(Ndays_conditions)
+        Nhours_list.append(Nhours_conditions)
+
     error_stddevs_conditions = xr.combine_by_coords(stddev_list)
-    N_stddevs_conditions = xr.combine_by_coords(N_list)
+    Ndays_stddevs_conditions = xr.combine_by_coords(Ndays_list)
+    Nhours_stddevs_conditions = xr.combine_by_coords(Nhours_list)
 
     # %%
     # Correct the figure axes for readability.
@@ -731,17 +752,19 @@ if __name__ == "__main__":
     # %%
     print("Clear")
     print(error_stddevs_conditions["clear"].to_dataframe())
-    print(N_stddevs_conditions["clear"].to_dataframe())
+    print(Ndays_stddevs_conditions["clear"].to_dataframe())
     print("Broken")
     print(error_stddevs_conditions["broken"].to_dataframe())
-    print(N_stddevs_conditions["broken"].to_dataframe())
+    print(Ndays_stddevs_conditions["broken"].to_dataframe())
     print("Cloudy")
     print(error_stddevs_conditions["cloudy"].to_dataframe())
-    print(N_stddevs_conditions["cloudy"].to_dataframe())
+    print(Ndays_stddevs_conditions["cloudy"].to_dataframe())
     # %%
 
     error_stddevs_conditions.to_dataframe().to_csv("data/figure_outputs/error_stddev_cloud_conditions.csv")
-    N_stddevs_conditions.to_dataframe().to_csv("data/figure_outputs/N_cloud_conditions.csv")
+    Ndays_stddevs_conditions.drop_vars("surface").to_dataframe().to_csv("data/figure_outputs/Ndays_cloud_conditions.csv")
+    Nhours_stddevs_conditions.drop_vars("surface").to_dataframe().to_csv("data/figure_outputs/Nhours_cloud_conditions.csv")
+
     # %%
     fig1.savefig(
         os.path.join(save_dir, f"DiurnalWhisker_clear_{surfrad_var}_{datestring}_localtime.png"),
