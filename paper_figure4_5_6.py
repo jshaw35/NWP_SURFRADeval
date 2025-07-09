@@ -355,13 +355,14 @@ def plot_diurnal_whiskerplot(
     utc_shift: int,
     meteo_mask: xr.DataArray = None,
     meteo_name: str = None,
+    nwp_sources_plot: list = ["hrrr", "rrfs_control"],
+    nwp_sources_analyze: list = ["hrrr", "rrfs_control"],
     fontsize: float = 16,
     axs: np.ndarray = None,
     orientation: str = "horizontal",
     num_panels_dim: int = 2,
     whis: float or (float, float) = 1.5,
     showfliers: bool = False,
-    nwp_sources: list = ["hrrr", "rrfs_control"],
 ):
     """
     Visualize the error and show the spread for each hour 
@@ -457,12 +458,14 @@ def plot_diurnal_whiskerplot(
 
     stddevs = []
     colors = [sns.color_palette("colorblind")[0] for i in axs]
-    for _nwp_source in nwp_error_reindexed.nwp_source:
+    for _nwp_source in nwp_sources_analyze:
+    # for _nwp_source in nwp_error_reindexed.nwp_source:
         error_data = nwp_error_reindexed.sel(nwp_source=_nwp_source)
         error_stddev = error_data.where(surfrad_reindexed.zenith < 80).std()
         stddevs.append(error_stddev)
 
-    for _nwp_source, ax, _color in zip(nwp_error_reindexed.nwp_source, axs, colors):
+    for _nwp_source, ax, _color in zip(nwp_sources_plot, axs, colors):
+    # for _nwp_source, ax, _color in zip(nwp_error_reindexed.nwp_source, axs, colors):
         error_data = nwp_error_reindexed.sel(nwp_source=_nwp_source)
 
         # source_rmse = rmse.sel(nwp_source=_nwp_source)
@@ -471,38 +474,40 @@ def plot_diurnal_whiskerplot(
         error_stddev = error_data.where(surfrad_reindexed.zenith < 80).std()
 
         # Only plot if the source is in the list of sources to plot.
-        if _nwp_source in nwp_sources:
-            # Convert error data to a format suitable for box plots
-            error_values_by_hour = [error_data.sel(hour=h).values.flatten() for h in range(24)]
-            # Filter out NaN values
-            error_values_by_hour = [errors[~np.isnan(errors)] for errors in error_values_by_hour]
+        # if _nwp_source in nwp_sources:
 
-            # Only include hours that have data (typically daylight hours)
-            valid_hours = [h for h in range(24) if len(error_values_by_hour[h]) > 0]
-            valid_error_values = [error_values_by_hour[h] for h in valid_hours]
+        # Convert error data to a format suitable for box plots
+        error_values_by_hour = [error_data.sel(hour=h).values.flatten() for h in range(24)]
+        # Filter out NaN values
+        error_values_by_hour = [errors[~np.isnan(errors)] for errors in error_values_by_hour]
 
-            # Create box plot
-            box_parts = ax.boxplot(
-                valid_error_values,
-                positions=valid_hours,
-                patch_artist=True,
-                widths=0.7,
-                whis=whis,
-                showfliers=showfliers,  # Hide outliers for cleaner visualization
-                medianprops={'color': 'black'},
-                boxprops={'facecolor': _color, 'alpha': 0.5}
-            )
+        # Only include hours that have data (typically daylight hours)
+        valid_hours = [h for h in range(24) if len(error_values_by_hour[h]) > 0]
+        valid_error_values = [error_values_by_hour[h] for h in valid_hours]
 
-            ax.set_ylim(-750, 750)
-            ax.set_xlabel(f"Local Time", fontsize=fontsize)
-            ax.set_ylabel(f"{surfrad_var.upper()} Error (Wm$^{-2}$)", fontsize=fontsize)
-            ax.set_title(
-                f"{str(_nwp_source.values)}",
-                fontsize=fontsize,
-            )
-            ax.set_xticks(range(0, 25, 6))
-            ax.set_xticklabels(range(0, 25, 6))
-            ax.tick_params(axis="both", labelsize=fontsize - 2)
+        # Create box plot
+        box_parts = ax.boxplot(
+            valid_error_values,
+            positions=valid_hours,
+            patch_artist=True,
+            widths=0.7,
+            whis=whis,
+            showfliers=showfliers,  # Hide outliers for cleaner visualization
+            medianprops={'color': 'black'},
+            boxprops={'facecolor': _color, 'alpha': 0.5}
+        )
+
+        ax.set_ylim(-750, 750)
+        ax.set_xlabel(f"Local Time", fontsize=fontsize)
+        ax.set_ylabel(f"{surfrad_var.upper()} Error (Wm$^{-2}$)", fontsize=fontsize)
+        ax.set_title(
+            # f"{str(_nwp_source.values)}",
+            _nwp_source,
+            fontsize=fontsize,
+        )
+        ax.set_xticks(range(0, 25, 6))
+        ax.set_xticklabels(range(0, 25, 6))
+        ax.tick_params(axis="both", labelsize=fontsize - 2)
 
     return xr.DataArray(stddevs, dims="nwp_source", coords={"nwp_source":nwp_error_reindexed.nwp_source.values})
 
@@ -595,7 +600,8 @@ if __name__ == "__main__":
             data_datetime_end,
             nwp_datavars,
         )
-        nwp_ds = nwp_ds.sel(nwp_source=["hrrr", "rrfs_control", "rrfs_mem0002"], location=surfrad_sitename).drop_vars("location")
+        # nwp_ds = nwp_ds.sel(nwp_source=["hrrr", "rrfs_control", "rrfs_mem0002"], location=surfrad_sitename).drop_vars("location")
+        nwp_ds = nwp_ds.sel(location=surfrad_sitename).drop_vars("location")
         nwp_masks = nwp_masks.sel(location=surfrad_sitename).drop_vars("location")
 
         # Collapse the forecast time dimension so the forecasts
@@ -647,13 +653,17 @@ if __name__ == "__main__":
         # appear as a timeseries. Must select a <= 24 hour forecast
         # window so there are no forecast overlaps.
         nwp_dayahead_ds = nwp_ds.sum(dim="time", min_count=1).load()
+        nwp_sources_plot = ["hrrr", "rrfs_control"]
+        nwp_sources_analyze = ["hrrr", "rrfs_control", "rrfs_mem0001", "rrfs_mem0002", "rrfs_mem0003", "rrfs_mem0004", "rrfs_mem0005"]
 
         # Plot the same error whisker plots while masking for different cloud conditions.
         clear_stddevs = plot_diurnal_whiskerplot(
             surfrad_var=surfrad_var,
             nwp_var=nwp_var,
             surfrad_ds=surfrad_ds,
-            nwp_ds=nwp_dayahead_ds.sel(nwp_source=["hrrr", "rrfs_control", "rrfs_mem0002"]),
+            nwp_ds=nwp_dayahead_ds, #.sel(nwp_source=["hrrr", "rrfs_control", "rrfs_mem0002"]),
+            nwp_sources_plot=nwp_sources_plot,
+            nwp_sources_analyze=nwp_sources_analyze,
             nwp_masks=nwp_masks,
             surfrad_masks=surfrad_masks,
             utc_shift=utc_shift,
@@ -673,7 +683,9 @@ if __name__ == "__main__":
             surfrad_var=surfrad_var,
             nwp_var=nwp_var,
             surfrad_ds=surfrad_ds,
-            nwp_ds=nwp_dayahead_ds.sel(nwp_source=["hrrr", "rrfs_control", "rrfs_mem0002"]),
+            nwp_ds=nwp_dayahead_ds, #.sel(nwp_source=["hrrr", "rrfs_control", "rrfs_mem0002"]),
+            nwp_sources_plot=nwp_sources_plot,
+            nwp_sources_analyze=nwp_sources_analyze,
             nwp_masks=nwp_masks,
             surfrad_masks=surfrad_masks,
             utc_shift=utc_shift,
@@ -693,7 +705,9 @@ if __name__ == "__main__":
             surfrad_var=surfrad_var,
             nwp_var=nwp_var,
             surfrad_ds=surfrad_ds,
-            nwp_ds=nwp_dayahead_ds.sel(nwp_source=["hrrr", "rrfs_control", "rrfs_mem0002"]),
+            nwp_ds=nwp_dayahead_ds, #.sel(nwp_source=["hrrr", "rrfs_control", "rrfs_mem0002"]),
+            nwp_sources_plot=nwp_sources_plot,
+            nwp_sources_analyze=nwp_sources_analyze,
             nwp_masks=nwp_masks,
             surfrad_masks=surfrad_masks,
             utc_shift=utc_shift,
@@ -738,7 +752,7 @@ if __name__ == "__main__":
             ax.xaxis.set_minor_locator(plt.MultipleLocator(2))
             ax.tick_params(which='major', length=8)
             ax.tick_params(which='minor', length=4)
-            ax.hlines(0, 5.5, 18.5, color='gray', linestyle='dashed', linewidth=1, zorder=1)
+            ax.hlines(0, 4.5, 19.5, color='red', linestyle='solid', linewidth=1, zorder=1)
         for ax in _axs.flat[:-2]:
             ax.set_xlabel("")
             ax.set_xticklabels([])

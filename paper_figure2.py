@@ -728,6 +728,7 @@ if __name__ == "__main__":
             ax.xaxis.set_minor_locator(plt.MultipleLocator(2))
             ax.tick_params(which='major', length=8)
             ax.tick_params(which='minor', length=4)
+            ax.hlines(0, 4.5, 19.5, color='red', linestyle='solid', linewidth=1, zorder=1)
         for ax in axs.flat[:-2]:
             ax.set_xlabel("")
             ax.set_xticklabels([])

@@ -370,7 +370,7 @@ def plot_rank_histogram(
         all_mask.sum() / (len(ens_members) + 1),
         bins[0],
         bins[-1],
-        color="black",
+        color="red",
         linestyle="dashed",
     )
     ax.set_xlabel(
