@@ -512,6 +512,52 @@ def plot_diurnal_whiskerplot(
     return xr.DataArray(stddevs, dims="nwp_source", coords={"nwp_source":nwp_error_reindexed.nwp_source.values})
 
 
+def compute_nwp_ensemble_averages(
+    ds: xr.Dataset,
+    ens_mems: list,
+    ens_name: str,
+    count_threshold: int,
+):
+    """
+    Create a new NWP product by averaging over specified products.
+    Then mask out areas of the average where data is missing.
+
+    Inputs:
+    ds: xarray Dataset
+        Data to operate on.
+    ens_mems: list
+        list of ensemble members identified by their "nwp_source" dimension.
+    ens_name: string
+        name for the new forecast product.
+    count_threshold: integer
+        integer specifying how many non-nans are needed to
+        compute the new field. Otherwise it will be masked.
+
+    Outputs:
+    ds_out: xarray Dataset
+        Data with the new mean value added along "nwp_source"
+    """
+
+    ens_subset = ds.sel(nwp_source=ens_mems)
+
+    # Mask the ensemble means if there are less than "count_threshold" members in them.
+    mems_empty = np.isnan(ens_subset).all(dim="valid_time").sum(dim="nwp_source")
+    mems_mask = (len(ens_mems) - mems_empty) >= count_threshold
+
+    ens_ds = ens_subset.mean(dim="nwp_source").where(mems_mask)
+
+    ds_out = xr.merge(
+        [
+            ds,
+            ens_ds.assign_coords(nwp_source=ens_name).expand_dims("nwp_source"),
+        ]
+    )
+    # Modify the mask so it broadcasts against the correct nwp_source values.
+    out_mask = np.bitwise_or(mems_mask, (ds_out.nwp_source != ens_name))
+
+    return ds_out, out_mask
+
+
 # %%
 if __name__ == "__main__":
 
@@ -609,6 +655,15 @@ if __name__ == "__main__":
         # window so there are no forecast overlaps.
         nwp_dayahead_ds = nwp_ds.sum(dim="time", min_count=1).load()
 
+        # Add an ensemble average for the RRFS forecasts.
+        rrfs_mems = [i for i in list(nwp_dayahead_ds.nwp_source.values) if i != "hrrr"]
+        nwp_dayahead_ds, rrfsmems_mask = compute_nwp_ensemble_averages(
+            nwp_dayahead_ds,
+            rrfs_mems,
+            ens_name="rrfs_ensmean",
+            count_threshold=6,
+        )
+
         # A more involved example applying masks for different
         # meteorological conditions and creating separate plots.
         nwp_mask = nwp_masks[nwp_var].sum(dim="time")
@@ -652,9 +707,9 @@ if __name__ == "__main__":
         # Collapse the forecast time dimension so the forecasts
         # appear as a timeseries. Must select a <= 24 hour forecast
         # window so there are no forecast overlaps.
-        nwp_dayahead_ds = nwp_ds.sum(dim="time", min_count=1).load()
         nwp_sources_plot = ["hrrr", "rrfs_control"]
-        nwp_sources_analyze = ["hrrr", "rrfs_control", "rrfs_mem0001", "rrfs_mem0002", "rrfs_mem0003", "rrfs_mem0004", "rrfs_mem0005"]
+        # "nwp_sources_analyze" must match the order of the nwp_source dimension in the nwp_dayahead_ds
+        nwp_sources_analyze = ["hrrr", "rrfs_control", "rrfs_ensmean", "rrfs_mem0001", "rrfs_mem0002", "rrfs_mem0003", "rrfs_mem0004", "rrfs_mem0005"]
 
         # Plot the same error whisker plots while masking for different cloud conditions.
         clear_stddevs = plot_diurnal_whiskerplot(
@@ -683,7 +738,7 @@ if __name__ == "__main__":
             surfrad_var=surfrad_var,
             nwp_var=nwp_var,
             surfrad_ds=surfrad_ds,
-            nwp_ds=nwp_dayahead_ds, #.sel(nwp_source=["hrrr", "rrfs_control", "rrfs_mem0002"]),
+            nwp_ds=nwp_dayahead_ds,
             nwp_sources_plot=nwp_sources_plot,
             nwp_sources_analyze=nwp_sources_analyze,
             nwp_masks=nwp_masks,
@@ -705,7 +760,7 @@ if __name__ == "__main__":
             surfrad_var=surfrad_var,
             nwp_var=nwp_var,
             surfrad_ds=surfrad_ds,
-            nwp_ds=nwp_dayahead_ds, #.sel(nwp_source=["hrrr", "rrfs_control", "rrfs_mem0002"]),
+            nwp_ds=nwp_dayahead_ds,
             nwp_sources_plot=nwp_sources_plot,
             nwp_sources_analyze=nwp_sources_analyze,
             nwp_masks=nwp_masks,
