@@ -1646,12 +1646,13 @@ if __name__ == "__main__":
 
     for _ax in axs:
         _ax.set_ylim(0, 350)
+    # %%
 
     # Extra plots to visualize the RRFS ensemble.
     surfrad_var = "ghi"
     nwp_var = "dswrf"
     surfrad_data = surfrad_ds[surfrad_var]
-    nwp_data = nwp_dayahead_ds[nwp_var].sel(location=surfrad_sitename).drop_sel(nwp_source=["hrrr"])
+    nwp_data = nwp_dayahead_ds[nwp_var].sel(location=surfrad_sitename) #.drop_sel(nwp_source=["hrrr"])
 
     # Shift so the time is UTC - 6 hours so days contain all sunlit timesteps.
     nwp_data["valid_time"] = nwp_data["valid_time"] - np.timedelta64(6, "h")
@@ -1727,14 +1728,20 @@ if __name__ == "__main__":
         if _nwp_source == "rrfs_control":
             alpha = 0.8
             linestyle = "solid"
+            color = "blue"
+        elif _nwp_source == "hrrr":
+            alpha = 0.8
+            linestyle = "solid"
+            color = "red"
         else:
             alpha = 0.5
             linestyle = "dashed"
+            color = "blue"
         ax.plot(
             _forecast_data.valid_time.dt.hour,
             _forecast_data,
             label=str(_nwp_source.values),
-            color="blue",
+            color=color,
             alpha=alpha,
             linestyle=linestyle,
             linewidth=1,
@@ -1746,8 +1753,64 @@ if __name__ == "__main__":
     ax.tick_params(axis="both", labelsize=fontsize - 4)
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(
-        handles[:3],
-        ["Observations", "RRFS Control", "RRFS ensemble (n=5)"],
+        handles[:4],
+        ["Observations", "HRRR", "RRFS Control", "RRFS ensemble (n=5)"],
+        loc="upper left",
+    )
+
+
+    # Plot all RRFS forecast products
+    fig, axs = plt.subplots(1, 2, figsize=(12, 6))
+
+    for ax, day in zip(axs, ["2024-03-07", "2024-03-21"]):
+
+        ax.set_title(day)
+        _nwp_day = nwp_data.sel(valid_time=day)
+        _surfrad_day = surfrad_data.sel(valid_time=day)
+
+        ax.plot(
+            _surfrad_day.valid_time.dt.hour,
+            _surfrad_day,
+            label="SURFRAD",
+            color="black",
+            alpha=0.8,
+            linestyle="solid",
+            linewidth=1,
+        )
+
+        for _nwp_source in _nwp_day.nwp_source:
+
+            _forecast_data = _nwp_day.sel(nwp_source=_nwp_source)
+            if _nwp_source == "rrfs_control":
+                alpha = 0.8
+                linestyle = "solid"
+                color = "blue"
+            elif _nwp_source == "hrrr":
+                alpha = 0.8
+                linestyle = "solid"
+                color = "red"
+            else:
+                alpha = 0.5
+                linestyle = "dashed"
+                color = "blue"
+            ax.plot(
+                _forecast_data.valid_time.dt.hour,
+                _forecast_data,
+                label=str(_nwp_source.values),
+                color=color,
+                alpha=alpha,
+                linestyle=linestyle,
+                linewidth=1,
+            )
+
+        ax.set_ylim(-10, 1000)
+        ax.set_xlabel("Hour of the Day", fontsize=fontsize)
+        ax.set_ylabel("GHI (Wm$^{-2}$)", fontsize=fontsize)
+        ax.tick_params(axis="both", labelsize=fontsize - 4)
+        handles, labels = ax.get_legend_handles_labels()
+    axs[0].legend(
+        handles[:4],
+        ["Observations", "HRRR", "RRFS Control", "RRFS Members 1-5"],
         loc="upper left",
     )
 
