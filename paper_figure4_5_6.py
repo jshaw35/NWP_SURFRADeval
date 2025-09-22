@@ -457,12 +457,18 @@ def plot_diurnal_whiskerplot(
         axs = [*axs.flat]
 
     stddevs = []
+    rmses = []
+    mbes = []
     colors = [sns.color_palette("colorblind")[0] for i in axs]
     for _nwp_source in nwp_sources_analyze:
     # for _nwp_source in nwp_error_reindexed.nwp_source:
         error_data = nwp_error_reindexed.sel(nwp_source=_nwp_source)
         error_stddev = error_data.where(surfrad_reindexed.zenith < 80).std()
+        error_rmse = np.sqrt((error_data**2).where(surfrad_reindexed.zenith < 80).mean())
+        error_mbe = error_data.where(surfrad_reindexed.zenith < 80).mean()
         stddevs.append(error_stddev)
+        rmses.append(error_rmse)
+        mbes.append(error_mbe)
 
     for _nwp_source, ax, _color in zip(nwp_sources_plot, axs, colors):
     # for _nwp_source, ax, _color in zip(nwp_error_reindexed.nwp_source, axs, colors):
@@ -509,7 +515,15 @@ def plot_diurnal_whiskerplot(
         ax.set_xticklabels(range(0, 25, 6))
         ax.tick_params(axis="both", labelsize=fontsize - 2)
 
-    return xr.DataArray(stddevs, dims="nwp_source", coords={"nwp_source":nwp_error_reindexed.nwp_source.values})
+        stddevs_da = xr.DataArray(stddevs, dims="nwp_source", coords={"nwp_source":nwp_error_reindexed.nwp_source.values})
+        rmse_da = xr.DataArray(rmses, dims="nwp_source", coords={"nwp_source":nwp_error_reindexed.nwp_source.values})
+        mbe_da = xr.DataArray(mbes, dims="nwp_source", coords={"nwp_source":nwp_error_reindexed.nwp_source.values})
+        stddevs_da = stddevs_da.assign_coords(variable="stddev").expand_dims("variable")
+        rmse_da = rmse_da.assign_coords(variable="rmse").expand_dims("variable")
+        mbe_da = mbe_da.assign_coords(variable="mbe").expand_dims("variable")
+
+    return xr.combine_by_coords([stddevs_da, rmse_da, mbe_da])
+    # return xr.DataArray(stddevs, dims="nwp_source", coords={"nwp_source":nwp_error_reindexed.nwp_source.values})
 
 
 def compute_nwp_ensemble_averages(
@@ -695,11 +709,13 @@ if __name__ == "__main__":
         cloudy_mask = ~(clear_mask | broken_mask | empty_mask)
 
         # Count the number of days for each cloud condition category.
+        all_Ndays = (~empty_mask).sum()
         clear_Ndays = clear_mask.sum()
         broken_Ndays = broken_mask.sum()
         cloudy_Ndays = cloudy_mask.sum()
 
         # Count the number of hourly timesteps for each cloud condition category.
+        all_Nhours = clearsky_index_data.count(dim=["dayofyear", "hour"])
         clear_Nhours = clearsky_index_data.where(clear_mask).count(dim=["dayofyear", "hour"])
         broken_Nhours = clearsky_index_data.where(broken_mask).count(dim=["dayofyear", "hour"])
         cloudy_Nhours = clearsky_index_data.where(cloudy_mask).count(dim=["dayofyear", "hour"])
@@ -712,6 +728,27 @@ if __name__ == "__main__":
         nwp_sources_analyze = ["hrrr", "rrfs_control", "rrfs_ensmean", "rrfs_mem0001", "rrfs_mem0002", "rrfs_mem0003", "rrfs_mem0004", "rrfs_mem0005"]
 
         # Plot the same error whisker plots while masking for different cloud conditions.
+        all_stddevs = plot_diurnal_whiskerplot(
+            surfrad_var=surfrad_var,
+            nwp_var=nwp_var,
+            surfrad_ds=surfrad_ds,
+            nwp_ds=nwp_dayahead_ds, #.sel(nwp_source=["hrrr", "rrfs_control", "rrfs_mem0002"]),
+            nwp_sources_plot=nwp_sources_plot,
+            nwp_sources_analyze=nwp_sources_analyze,
+            nwp_masks=nwp_masks,
+            surfrad_masks=surfrad_masks,
+            utc_shift=utc_shift,
+            # meteo_mask=clear_mask,
+            # orientation="horizontal",
+            # num_panels_dim=1,
+            whis=(2.5, 97.5),
+            showfliers=showfliers,
+            # axs=_axs1,
+        )
+        all_stddevs.name = "all"
+        all_Ndays.name = "all"
+        all_Nhours.name = "all"
+
         clear_stddevs = plot_diurnal_whiskerplot(
             surfrad_var=surfrad_var,
             nwp_var=nwp_var,
@@ -777,9 +814,9 @@ if __name__ == "__main__":
         cloudy_Ndays.name = "cloudy"
         cloudy_Nhours.name = "cloudy"
 
-        error_stddevs_conditions = xr.merge([clear_stddevs, broken_stddevs, cloudy_stddevs]).assign_coords(location=surfrad_sitename).expand_dims("location")
-        Ndays_conditions = xr.merge([clear_Ndays, broken_Ndays, cloudy_Ndays]).assign_coords(location=surfrad_sitename).expand_dims("location")
-        Nhours_conditions = xr.merge([clear_Nhours, broken_Nhours, cloudy_Nhours]).assign_coords(location=surfrad_sitename).expand_dims("location")
+        error_stddevs_conditions = xr.merge([all_stddevs, clear_stddevs, broken_stddevs, cloudy_stddevs]).assign_coords(location=surfrad_sitename).expand_dims("location")
+        Ndays_conditions = xr.merge([all_Ndays, clear_Ndays, broken_Ndays, cloudy_Ndays]).assign_coords(location=surfrad_sitename).expand_dims("location")
+        Nhours_conditions = xr.merge([all_Nhours, clear_Nhours, broken_Nhours, cloudy_Nhours]).assign_coords(location=surfrad_sitename).expand_dims("location")
         stddev_list.append(error_stddevs_conditions)
         Ndays_list.append(Ndays_conditions)
         Nhours_list.append(Nhours_conditions)
@@ -819,18 +856,26 @@ if __name__ == "__main__":
         _fig.subplots_adjust(wspace=0.1)
 
     # %%
+    print("All")
+    for _var in error_stddevs_conditions.variable:
+        print(error_stddevs_conditions["all"].sel(variable=_var).to_dataframe())
+    print(Ndays_stddevs_conditions["all"].to_dataframe())
     print("Clear")
-    print(error_stddevs_conditions["clear"].to_dataframe())
+    for _var in error_stddevs_conditions.variable:
+        print(error_stddevs_conditions["clear"].sel(variable=_var).to_dataframe())
     print(Ndays_stddevs_conditions["clear"].to_dataframe())
     print("Broken")
-    print(error_stddevs_conditions["broken"].to_dataframe())
+    for _var in error_stddevs_conditions.variable:
+        print(error_stddevs_conditions["broken"].sel(variable=_var).to_dataframe())
+    # print(error_stddevs_conditions["broken"].to_dataframe())
     print(Ndays_stddevs_conditions["broken"].to_dataframe())
     print("Cloudy")
-    print(error_stddevs_conditions["cloudy"].to_dataframe())
+    for _var in error_stddevs_conditions.variable:
+        print(error_stddevs_conditions["cloudy"].sel(variable=_var).to_dataframe())
     print(Ndays_stddevs_conditions["cloudy"].to_dataframe())
     # %%
 
-    error_stddevs_conditions.to_dataframe().to_csv("data/figure_outputs/error_stddev_cloud_conditions.csv")
+    error_stddevs_conditions.to_dataframe().to_csv("data/figure_outputs/error_all_cloud_conditions.csv")
     Ndays_stddevs_conditions.drop_vars("surface").to_dataframe().to_csv("data/figure_outputs/Ndays_cloud_conditions.csv")
     Nhours_stddevs_conditions.drop_vars("surface").to_dataframe().to_csv("data/figure_outputs/Nhours_cloud_conditions.csv")
 
