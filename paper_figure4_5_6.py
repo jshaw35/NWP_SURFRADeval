@@ -515,9 +515,9 @@ def plot_diurnal_whiskerplot(
         ax.set_xticklabels(range(0, 25, 6))
         ax.tick_params(axis="both", labelsize=fontsize - 2)
 
-        stddevs_da = xr.DataArray(stddevs, dims="nwp_source", coords={"nwp_source":nwp_error_reindexed.nwp_source.values})
-        rmse_da = xr.DataArray(rmses, dims="nwp_source", coords={"nwp_source":nwp_error_reindexed.nwp_source.values})
-        mbe_da = xr.DataArray(mbes, dims="nwp_source", coords={"nwp_source":nwp_error_reindexed.nwp_source.values})
+        stddevs_da = xr.DataArray(stddevs, dims="nwp_source", coords={"nwp_source":nwp_sources_analyze})
+        rmse_da = xr.DataArray(rmses, dims="nwp_source", coords={"nwp_source":nwp_sources_analyze})
+        mbe_da = xr.DataArray(mbes, dims="nwp_source", coords={"nwp_source":nwp_sources_analyze})
         stddevs_da = stddevs_da.assign_coords(variable="stddev").expand_dims("variable")
         rmse_da = rmse_da.assign_coords(variable="rmse").expand_dims("variable")
         mbe_da = mbe_da.assign_coords(variable="mbe").expand_dims("variable")
@@ -677,6 +677,12 @@ if __name__ == "__main__":
             ens_name="rrfs_ensmean",
             count_threshold=6,
         )
+        nwp_dayahead_ds, rrfsmems_mask = compute_nwp_ensemble_averages(
+            nwp_dayahead_ds,
+            list(nwp_dayahead_ds.nwp_source.values),
+            ens_name="all_ensmean",
+            count_threshold=6,
+        )
 
         # A more involved example applying masks for different
         # meteorological conditions and creating separate plots.
@@ -725,7 +731,7 @@ if __name__ == "__main__":
         # window so there are no forecast overlaps.
         nwp_sources_plot = ["hrrr", "rrfs_control"]
         # "nwp_sources_analyze" must match the order of the nwp_source dimension in the nwp_dayahead_ds
-        nwp_sources_analyze = ["hrrr", "rrfs_control", "rrfs_ensmean", "rrfs_mem0001", "rrfs_mem0002", "rrfs_mem0003", "rrfs_mem0004", "rrfs_mem0005"]
+        nwp_sources_analyze = ["hrrr", "rrfs_control", "rrfs_ensmean", "all_ensmean", "rrfs_mem0001", "rrfs_mem0002", "rrfs_mem0003", "rrfs_mem0004", "rrfs_mem0005"]
 
         # Plot the same error whisker plots while masking for different cloud conditions.
         all_stddevs = plot_diurnal_whiskerplot(
