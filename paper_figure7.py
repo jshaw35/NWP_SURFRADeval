@@ -486,7 +486,7 @@ if __name__ == "__main__":
 
         surfrad_afternoon_mask = ((surfrad_masks[surfrad_var].valid_time.dt.hour + utc_shift) % 24 >= afternoon_hours[0]).values & \
         ((surfrad_masks[surfrad_var].valid_time.dt.hour + utc_shift) % 24 <= afternoon_hours[1]).values
-        
+
         surfrad_morning_mask = np.bitwise_and(
             (surfrad_masks[surfrad_var].valid_time.dt.hour + utc_shift) % 24 >= morning_hours[0],
             (surfrad_masks[surfrad_var].valid_time.dt.hour + utc_shift) % 24 <= morning_hours[1]
@@ -537,6 +537,7 @@ if __name__ == "__main__":
         nwp_dayahead_ds = nwp_ds.sum(dim="time", min_count=1).load()
 
         rrfs_members = [
+            "hrrr",
             "rrfs_control",
             "rrfs_mem0001",
             "rrfs_mem0002",
@@ -591,7 +592,7 @@ if __name__ == "__main__":
     # %%
 
     fig.savefig(
-        os.path.join(save_dir, f"RankHistogram_{surfrad_var}_{datestring}_{morning_hours[0]}_{morning_hours[1]}_{afternoon_hours[0]}_{afternoon_hours[1]}.png"),
+        os.path.join(save_dir, f"RankHistogram_{surfrad_var}_{datestring}_{morning_hours[0]}_{morning_hours[1]}_{afternoon_hours[0]}_{afternoon_hours[1]}_hrrr.png"),
         format="png",
         bbox_inches="tight",
         dpi=200,
