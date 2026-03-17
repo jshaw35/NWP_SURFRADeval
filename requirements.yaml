@@ -1,0 +1,17 @@
+name: RRFS_HRRR
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - numpy~=1.26.4
+  - pandas~=2.2.2
+  - xarray~=2024.5.0
+  - dask~=2024.5.0
+  - matplotlib~=3.8.4
+  - pvlib~=0.10.5
+  - seaborn~=0.13.2
+  - netcdf4~=1.6.5
+  - cfgrib~=0.9.11.0
+
+# To create the environment, run:
+# conda env create -f requirements.yaml

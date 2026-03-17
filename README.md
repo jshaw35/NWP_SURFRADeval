@@ -17,6 +17,9 @@ Instructions for running:
 > conda create --name rrfs_venv --file requirements.txt  
 > conda activate rrfs_venv
 
+Or:
+> conda env create -f environment.yaml
+
 2\. Download Surfrad observations and NOAA NWP forecasts.
 
 * Download single-variable NWP forecast data from an EPRI server.

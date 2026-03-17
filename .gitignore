@@ -1,6 +1,8 @@
 *.grib2*
 *.csv
 *.png
+*.jpg
+*.pdf
 
 data/**
 rrfs_venv/**
