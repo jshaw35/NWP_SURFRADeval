@@ -526,6 +526,196 @@ def plot_diurnal_whiskerplot(
     # return xr.DataArray(stddevs, dims="nwp_source", coords={"nwp_source":nwp_error_reindexed.nwp_source.values})
 
 
+def plot_diurnal_whiskerplot2(
+    surfrad_var: str,
+    nwp_var: str,
+    surfrad_ds: xr.Dataset,
+    nwp_ds: xr.Dataset,
+    nwp_sources_plot: xr.Dataset,
+    nwp_masks: xr.DataArray,
+    surfrad_masks: xr.DataArray,
+    utc_shift: int,
+    meteo_mask: xr.DataArray = None,
+    meteo_name: str = None,
+    fontsize: float = 16,
+    axs: np.ndarray = None,
+    orientation: str = "horizontal",
+    num_panels_dim: int = 2,
+    whis: float or (float, float) = 1.5,
+    showfliers: bool = False,
+    save_figs: bool = False,
+):
+    """
+    Visualize the error and show the spread for each hour 
+    of the day using box and whisker plots, with multiple NWP sources
+    staggered side-by-side within the same panel.
+
+    Inputs:
+    surfrad_var: string
+        variable identifier for SURFRAD observations.
+    nwp_var: string
+        variable identifier for NWP forecast data.
+    surfrad_ds: xarray Dataset
+        Dataset containing SURFRAD observations.
+    nwp_ds: xarray Dataset
+        Dataset containing NWP forecast data.
+    nwp_masks: xarray Dataset
+        Dataset containing masks for each NWP variable.
+    surfrad_masks: xarray Dataset
+        Dataset containing masks for each obs variable.
+    utc_shift: integer
+        number of hours to shift data by to get a local time.
+        e.g. utc_shift = -6 sets the time coordinate to UTC - 6, or ~ET.
+    meteo_mask: xarray Dataset
+        Mask for meteorological conditions.
+    meteo_name: string
+        String appended to output file name to identify the mask.
+    fontsize: float
+        float for determining figure fontsizes
+    orientation: string
+        How to orient the figure panels: {"horizontal","vertical"}
+    num_panels_dim: integer
+        Number of panels to allow along the non-orientation dimension.
+    whis: float or (float, float)
+        The reach of the whiskers to the box length.
+        See matplotlib boxplot documentation for details.
+    show_fliers: boolean
+        Whether to show outliers in the box and whisker plot.
+    save_figs: boolean
+        boolean indicating whether the figure should be saved.
+    """
+    nwp_mask = nwp_masks[nwp_var].sum(dim="time")
+    surfrad_mask = surfrad_masks[surfrad_var]
+    all_mask = nwp_mask & surfrad_mask
+    if meteo_mask is not None:
+        # Need to convert the mask to the valid_time dimension.
+        meteo_days = meteo_mask.dayofyear.isel(dayofyear=meteo_mask)
+        meteo_mask = [i.values in meteo_days for i in all_mask.valid_time.dt.dayofyear]
+        all_mask = all_mask & meteo_mask
+    else:
+        meteo_name = None
+
+    nwp_data = nwp_ds[nwp_var].where(all_mask).load()
+    surfrad_data = surfrad_ds[surfrad_var].where(all_mask).load()
+
+    nwp_reindexed = shift_and_reindex_time(
+        nwp_data,
+        nwp_var,
+        "valid_time",
+        utc_shift=utc_shift,
+    )
+    surfrad_reindexed = shift_and_reindex_time(
+        surfrad_data,
+        surfrad_var,
+        "valid_time",
+        utc_shift=utc_shift,
+    )
+
+    nwp_error_reindexed = nwp_reindexed - surfrad_reindexed
+
+    # Create the figure and axes if not provided
+    if axs is None:
+        num_panels = 1
+        panel_size = 8
+        if orientation == "horizontal":
+            fig, axs = plt.subplots(
+                num_panels_dim,
+                num_panels,
+                figsize=(
+                    panel_size * num_panels,
+                    panel_size * num_panels_dim,
+                ),
+            )
+            if num_panels_dim == 1:
+                axs = [axs]
+            else:
+                axs = [*axs.flat]
+            fig.subplots_adjust(wspace=0.38, hspace=0.25)
+
+        if orientation == "vertical":
+            fig, axs = plt.subplots(
+                num_panels,
+                num_panels_dim,
+                figsize=(
+                    panel_size * num_panels_dim,
+                    panel_size * num_panels,
+                ),
+            )
+            if num_panels_dim == 1:
+                axs = [axs]
+            else:
+                axs = [*axs.flat]
+            fig.subplots_adjust(wspace=0.3, hspace=0.25)
+
+    ax = axs[0] if isinstance(axs, list) else axs
+    colors = sns.color_palette("colorblind")[:len(nwp_error_reindexed.nwp_source)]
+    
+    # Get valid hours (those with data)
+    valid_hours = set()
+    for _nwp_source in nwp_error_reindexed.nwp_source:
+        error_data = nwp_error_reindexed.sel(nwp_source=_nwp_source)
+        for h in range(24):
+            if not np.isnan(error_data.sel(hour=h).values).all():
+                valid_hours.add(h)
+    valid_hours = sorted(list(valid_hours))
+    
+    # Stagger positions for side-by-side comparison
+    # num_sources = len(nwp_error_reindexed.nwp_source)
+    num_sources = len(nwp_sources_plot)
+    offset = 0.40
+    position_offset = np.linspace(-offset * (num_sources - 1) / 2, offset * (num_sources - 1) / 2, num_sources)
+    
+    # Store legend elements
+    legend_elements = []
+    
+    # for source_idx, (_nwp_source, _color) in enumerate(zip(nwp_error_reindexed.nwp_source, colors)):
+    for source_idx, (_nwp_source, _color) in enumerate(zip(nwp_sources_plot, colors)):
+        error_data = nwp_error_reindexed.sel(nwp_source=_nwp_source)
+        
+        # Convert error data to a format suitable for box plots
+        error_values_by_hour = [error_data.sel(hour=h).values.flatten() for h in valid_hours]
+        # Filter out NaN values
+        error_values_by_hour = [errors[~np.isnan(errors)] for errors in error_values_by_hour]
+        
+        # Create staggered positions
+        positions = [h + position_offset[source_idx] for h in valid_hours]
+        
+        # Create box plot
+        box_parts = ax.boxplot(
+            error_values_by_hour,
+            positions=positions,
+            patch_artist=True,
+            widths=0.30,
+            whis=whis,
+            showfliers=showfliers,
+            medianprops={'color': 'black'},
+            boxprops={'facecolor': _color, 'alpha': 0.7}
+        )
+
+        # Add legend element for this source
+        legend_elements.append(plt.Rectangle((0, 0), 1, 1, facecolor=_color, alpha=0.7, label=_nwp_source.upper()))
+    
+    ax.set_ylim(-750, 750)
+    ax.set_xlabel("Local Time (hours)", fontsize=fontsize)
+    ax.set_ylabel(f"{surfrad_var.upper()} Error (Wm$^{-2}$)", fontsize=fontsize)
+    ax.set_xticks(valid_hours)
+    ax.set_xticklabels([f"{h:02d}" for h in valid_hours])
+    ax.tick_params(axis="both", labelsize=fontsize - 2)
+    ax.legend(handles=legend_elements, fontsize=fontsize - 2)
+    ax.grid(axis='y', alpha=0.3)
+
+    if save_figs:
+        save_filename = f"DailyErrorPanels_{meteo_name}_{surfrad_var}_{datestring}_{surfrad_sitename}.png"
+        save_path = os.path.join(save_dir, save_filename)
+        fig.savefig(
+            save_path,
+            format="png",
+            bbox_inches="tight",
+        )
+
+    return axs if isinstance(axs, list) else ax
+
+
 def compute_nwp_ensemble_averages(
     ds: xr.Dataset,
     ens_mems: list,
@@ -630,6 +820,22 @@ if __name__ == "__main__":
         figsize=(10, 25),
     )
 
+    fig4, axs4 = plt.subplots(
+        7,
+        1,
+        figsize=(8, 25),
+    )
+    fig5, axs5 = plt.subplots(
+        7,
+        1,
+        figsize=(8, 25),
+    )
+    fig6, axs6 = plt.subplots(
+        7,
+        1,
+        figsize=(8, 25),
+    )
+
     surfrad_sitenames = ["dra", "tbl", "fpk", "sxf", "bon", "gwn", "psu"]
     utc_shift_dict = {
         "dra": -8,
@@ -643,7 +849,7 @@ if __name__ == "__main__":
     stddev_list = []
     Ndays_list = []
     Nhours_list = []
-    for surfrad_sitename, _axs1, _axs2, _axs3 in zip(surfrad_sitenames, axs1, axs2, axs3):
+    for surfrad_sitename, _axs1, _axs2, _axs3, _axs4, _axs5, _axs6 in zip(surfrad_sitenames, axs1, axs2, axs3, axs4, axs5, axs6):
         print(f"Processing {surfrad_sitename.upper()}")
         utc_shift = utc_shift_dict[surfrad_sitename]
 
@@ -772,6 +978,22 @@ if __name__ == "__main__":
             showfliers=showfliers,
             axs=_axs1,
         )
+        _ = plot_diurnal_whiskerplot2(
+            surfrad_var=surfrad_var,
+            nwp_var=nwp_var,
+            surfrad_ds=surfrad_ds,
+            nwp_ds=nwp_dayahead_ds,
+            nwp_sources_plot=nwp_sources_plot,
+            nwp_masks=nwp_masks,
+            surfrad_masks=surfrad_masks,
+            utc_shift=utc_shift,
+            meteo_mask=clear_mask,
+            orientation="horizontal",
+            num_panels_dim=1,
+            whis=(2.5, 97.5),
+            showfliers=showfliers,
+            axs=_axs4,
+        )
         clear_stddevs.name = "clear"
         clear_Ndays.name = "clear"
         clear_Nhours.name = "clear"
@@ -793,6 +1015,22 @@ if __name__ == "__main__":
             whis=(2.5, 97.5),
             showfliers=showfliers,
             axs=_axs2,
+        )
+        _ = plot_diurnal_whiskerplot2(
+            surfrad_var=surfrad_var,
+            nwp_var=nwp_var,
+            surfrad_ds=surfrad_ds,
+            nwp_ds=nwp_dayahead_ds,
+            nwp_sources_plot=nwp_sources_plot,
+            nwp_masks=nwp_masks,
+            surfrad_masks=surfrad_masks,
+            utc_shift=utc_shift,
+            meteo_mask=broken_mask,
+            orientation="horizontal",
+            num_panels_dim=1,
+            whis=(2.5, 97.5),
+            showfliers=showfliers,
+            axs=_axs5,
         )
         broken_stddevs.name = "broken"
         broken_Ndays.name = "broken"
@@ -816,6 +1054,22 @@ if __name__ == "__main__":
             showfliers=showfliers,
             axs=_axs3,
         )
+        _ = plot_diurnal_whiskerplot2(
+            surfrad_var=surfrad_var,
+            nwp_var=nwp_var,
+            surfrad_ds=surfrad_ds,
+            nwp_ds=nwp_dayahead_ds,
+            nwp_sources_plot=nwp_sources_plot,
+            nwp_masks=nwp_masks,
+            surfrad_masks=surfrad_masks,
+            utc_shift=utc_shift,
+            meteo_mask=cloudy_mask,
+            orientation="horizontal",
+            num_panels_dim=1,
+            whis=(2.5, 97.5),
+            showfliers=showfliers,
+            axs=_axs6,
+        )
         cloudy_stddevs.name = "cloudy"
         cloudy_Ndays.name = "cloudy"
         cloudy_Nhours.name = "cloudy"
@@ -826,6 +1080,7 @@ if __name__ == "__main__":
         stddev_list.append(error_stddevs_conditions)
         Ndays_list.append(Ndays_conditions)
         Nhours_list.append(Nhours_conditions)
+        # break
 
     error_stddevs_conditions = xr.combine_by_coords(stddev_list)
     Ndays_stddevs_conditions = xr.combine_by_coords(Ndays_list)
@@ -859,6 +1114,32 @@ if __name__ == "__main__":
             ax.set_yticklabels([])
         _axs[0, 0].set_title("HRRR", fontsize=16)
         _axs[0, 1].set_title("RRFS Control", fontsize=16)
+        _fig.subplots_adjust(wspace=0.1)
+
+    # %%
+    # Correct the figure axes for readability. New Fig.
+    panel_letters = ['a.', 'b.', 'c.', 'd.', 'e.', 'f.', 'g.']
+    panel_labels = []
+    for _fig, _axs in zip([fig4, fig5, fig6], [axs4, axs5, axs6]):
+        for i, let in enumerate(panel_letters):
+            surfrad_sitename = surfrad_sitenames[i]
+            panel_labels.append(f"{let} {surfrad_sitename.upper()}")
+        for ax, panel_label in zip(_axs.flat, panel_labels):
+            ax.set_title("")
+            ax.annotate(panel_label, xy=(0.02, 0.9), xycoords="axes fraction", fontsize=16)
+            ax.set_xticks(range(0, 25, 2))
+            ax.set_xlim(4.5, 19.5)
+            ax.set_ylim(-750, 750)
+            ax.xaxis.set_major_locator(plt.MultipleLocator(6))
+            ax.xaxis.set_minor_locator(plt.MultipleLocator(2))
+            ax.tick_params(which='major', length=8)
+            ax.tick_params(which='minor', length=4)
+            ax.hlines(0, 4.5, 19.5, color='red', linestyle='solid', linewidth=1, zorder=1)
+        for ax in _axs.flat[:-1]:
+            ax.set_xlabel("")
+            ax.set_xticklabels([])
+        for ax in _axs.flat[1:]:
+            ax.get_legend().remove()
         _fig.subplots_adjust(wspace=0.1)
 
     # %%
@@ -904,6 +1185,26 @@ if __name__ == "__main__":
         bbox_inches="tight",
         dpi=200,
     )
+
+    fig4.savefig(
+        os.path.join(save_dir, f"DiurnalWhisker_clear_{surfrad_var}_{datestring}_localtime_shared.png"),
+        format="png",
+        bbox_inches="tight",
+        dpi=200,
+    )
+    fig5.savefig(
+        os.path.join(save_dir, f"DiurnalWhisker_broken_{surfrad_var}_{datestring}_localtime_shared.png"),
+        format="png",
+        bbox_inches="tight",
+        dpi=200,
+    )
+    fig6.savefig(
+        os.path.join(save_dir, f"DiurnalWhisker_cloudy_{surfrad_var}_{datestring}_localtime_shared.png"),
+        format="png",
+        bbox_inches="tight",
+        dpi=200,
+    )
+
     # Figure caption:
     # Hourly box and whisker plots of surface downwelling shortwave radiation error separated by clear, partly cloudy, and overcast days.
     # Error is computed for HRRR (left column) and RRFS Control (right columns) forecasts relative to SURFRAD observations at each SURFRAD site. Whiskers span a 95% confidence interval. The root-mean-square error (RMSE) for sunlit conditions (solar zenith angle <80) is shown in red in the upper right of each panel.
