@@ -707,7 +707,7 @@ if __name__ == "__main__":
     daily_csi_mean = clearsky_index_data.mean(dim="hour")
     daily_csi_stddev = clearsky_index_data.std(dim="hour")
 
-    # Somewhat adhoc classifications from looking at the data.
+    # Cloud classifications from looking at the data.
     empty_mask = daily_csi_mean.isnull()
     clear_mask = daily_csi_mean > 0.95
     broken_mask = np.bitwise_and(
