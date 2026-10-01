@@ -792,7 +792,7 @@ if __name__ == "__main__":
     broken_stddev_weight = 2.0
     broken_thresh_hrrr_correction = 0.02
     sunlit_zenith = 80
-    Afactor = 16.0
+    Afactor = 1.0
 
     # The sunlit hours are selected by the SURFRAD solar zenith angle, so
     # that the observations and every forecast product are classified over
@@ -925,6 +925,7 @@ if __name__ == "__main__":
         clear_mask = obs_regime == REGIME_CLEAR
         broken_mask = obs_regime == REGIME_BROKEN
         cloudy_mask = obs_regime == REGIME_CLOUDY
+        all_mask = obs_regime > 0
 
         # Forecast cloud regime, classified independently per product.
         fcast_reindexed = shift_and_reindex_time(
@@ -969,14 +970,8 @@ if __name__ == "__main__":
 
         # Now compute the new weighted average and add it to the nwp_dayahead_ds dataset.
         hrrr_informed_weighted_mean = nwp_dayahead_ds.sel(nwp_source=weights.nwp_source).weighted(weights_valid_time).mean("nwp_source")
-        hrrr_informed_weighted_mean = hrrr_informed_weighted_mean.expand_dims(nwp_source=["weighted_mean"])
+        hrrr_informed_weighted_mean = hrrr_informed_weighted_mean.expand_dims(nwp_source=["weighted_mean"]).sel(valid_time=nwp_dayahead_ds.valid_time)
         combine_nwp_ds = xr.concat([nwp_dayahead_ds, hrrr_informed_weighted_mean], dim="nwp_source")
-
-        # # Compute the weighted average of the forecast regime across all products
-        # weighted_mean = fcast_reindexed.weighted(weights).mean("nwp_source")
-        # weighted_mean = weighted_mean.expand_dims(nwp_source=["weighted_mean"])
-        # combine_nwp_ds = fcast_reindexed.copy()
-        # combine_nwp_ds = xr.concat([combine_nwp_ds, weighted_mean], dim="nwp_source")
 
         nwp_sources_plot = ["all_ensmean", "weighted_mean"]
         showfliers = False
@@ -984,6 +979,7 @@ if __name__ == "__main__":
         nwp_sources_analyze = ["hrrr", "rrfs_control", "rrfs_ensmean", "all_ensmean", "rrfs_mem0001", "rrfs_mem0002", "rrfs_mem0003", "rrfs_mem0004", "rrfs_mem0005", "weighted_mean"]
 
         # Plot the same error whisker plots while masking for different cloud conditions.
+        _, fake_axs = plt.subplots(1, 2)
         all_stddevs = plot_diurnal_whiskerplot(
             surfrad_var=surfrad_var,
             nwp_var=nwp_var,
@@ -994,12 +990,10 @@ if __name__ == "__main__":
             nwp_masks=nwp_masks.sel(location=surfrad_sitename).drop_vars("location"),
             surfrad_masks=surfrad_masks,
             utc_shift=utc_shift,
-            # meteo_mask=clear_mask,
-            # orientation="horizontal",
-            # num_panels_dim=1,
+            meteo_mask=all_mask,
             whis=(2.5, 97.5),
             showfliers=showfliers,
-            # axs=_axs1,
+            axs=fake_axs,
         )
         all_stddevs.name = "all"
         clear_stddevs = plot_diurnal_whiskerplot(
@@ -1017,7 +1011,7 @@ if __name__ == "__main__":
             num_panels_dim=1,
             whis=(2.5, 97.5),
             showfliers=showfliers,
-            # axs=_axs1,
+            axs=fake_axs,
         )
         clear_stddevs.name = "clear"
 
@@ -1037,7 +1031,7 @@ if __name__ == "__main__":
             num_panels_dim=1,
             whis=(2.5, 97.5),
             showfliers=showfliers,
-            # axs=_axs2,
+            axs=fake_axs,
         )
         broken_stddevs.name = "broken"
 
@@ -1057,13 +1051,12 @@ if __name__ == "__main__":
             num_panels_dim=1,
             whis=(2.5, 97.5),
             showfliers=showfliers,
-            # axs=_axs3,
+            axs=fake_axs,
         )
         cloudy_stddevs.name = "cloudy"
 
         error_stddevs_conditions = xr.merge([all_stddevs, clear_stddevs, broken_stddevs, cloudy_stddevs]).assign_coords(location=surfrad_sitename).expand_dims("location")
         stddev_list.append(error_stddevs_conditions)
-        # break
 
     error_stddevs_conditions = xr.combine_by_coords(stddev_list)
     error_stddevs_conditions.to_dataframe().to_csv(f"data/figure_outputs/error_all_cloud_conditions_HRRRweighted_Afactor_{Afactor}.csv")
