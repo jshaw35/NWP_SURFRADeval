@@ -337,6 +337,24 @@ if __name__ == "__main__":
         # ax.grid(visible=True, which="both", linestyle="--", alpha=0.5)
         ax.text(0.05, 0.95, label, transform=ax.transAxes, ha="center", fontsize=fontsize)
 
+    # Annotate members 4 and 5
+    # axs[0].text(0.3, 0.9, "RRFS mem4, mem5", transform=axs[0].transAxes, ha="center", fontsize=fontsize-2)
+    # axs[1].text(0.75, 0.94, "RRFS mem4, mem5", transform=axs[1].transAxes, ha="center", fontsize=fontsize-2)
+    axs[0].annotate(
+        "RRFS mem1, RRFS mem4",
+        xy=(0.48, 0.8),
+        xytext=(0.25, 0.87),
+        xycoords="axes fraction",
+        arrowprops={"arrowstyle": "->", "color": "black", "linewidth": 1},
+    )
+    axs[1].annotate(
+        "RRFS mem1, RRFS mem4",
+        xy=(0.48, 0.87),
+        xytext=(0.25, 0.94),
+        xycoords="axes fraction",
+        arrowprops={"arrowstyle": "->", "color": "black", "linewidth": 1},
+    )
+
     plt.tight_layout()
     plt.savefig(
         os.path.join(save_dir, f"fig_supp1_anecdotal.png"),
