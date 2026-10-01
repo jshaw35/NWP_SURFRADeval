@@ -792,7 +792,7 @@ if __name__ == "__main__":
     broken_stddev_weight = 2.0
     broken_thresh_hrrr_correction = 0.02
     sunlit_zenith = 80
-    Afactor = 8.0
+    Afactor = 16.0
 
     # The sunlit hours are selected by the SURFRAD solar zenith angle, so
     # that the observations and every forecast product are classified over
